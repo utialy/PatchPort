@@ -1,0 +1,49 @@
+"""Project-scoped Bridge launcher; no automatic runner launch."""
+from datetime import datetime
+import os
+import json
+from pathlib import Path
+import subprocess
+import sys
+import uuid
+
+home = Path(__file__).resolve().parent
+python = Path(__BRIDGE_PYTHON__)
+base = [str(python), "-m", "agent_bridge", "--config", str(home / "bridge.json")]
+# This is a main-project launcher, never a worker-side delegation tool.
+config = json.loads((home / "bridge.json").read_text(encoding="utf-8-sig"))
+project_root = (home / config.get("project", ".")).resolve()
+worker_root = (project_root / config.get("state", ".agent-bridge") / "workspaces").resolve()
+if Path.cwd().resolve().is_relative_to(worker_root) or Path.cwd().resolve().is_relative_to(home / ".role-flows"):
+    raise SystemExit("Bridge workers cannot delegate or control a runner")
+
+env = dict(os.environ)
+env.pop("PYTHONPATH", None)
+env["PYTHONUTF8"] = "1"
+
+def command(args):
+    return subprocess.run(base + args, cwd=home, env=env).returncode
+
+args = sys.argv[1:] or ["status"]
+if args[0] == "role-manage":
+    raise SystemExit(subprocess.run([str(python), str(home / "role_manage.py"), "--project", str(home), *args[1:]], cwd=home, env=env).returncode)
+if args[0] == "role-review":
+    raise SystemExit(subprocess.run([str(python), str(home / "role_review.py"), "--project", str(home), *args[1:]], cwd=home, env=env).returncode)
+if args[0] == "overview":
+    raise SystemExit(subprocess.run([str(python), str(home / "project_overview.py"), "--project", str(home), *args[1:]], cwd=home, env=env).returncode)
+if args[0] == "develop-review":
+    raise SystemExit(subprocess.run([str(python), str(home / "role_flow.py"), "--project", str(home), *args[1:]], cwd=home, env=env).returncode)
+if args[0] in ("demo", "ask"):
+    if args == ["demo"]:
+        target = "local-check"
+    elif len(args) == 2 and args[0] == "ask" and args[1] in ("claude", "codex"):
+        target = args[1]
+    else:
+        raise SystemExit("Use: python bridge.py demo | python bridge.py ask claude | python bridge.py ask codex")
+    task_id = "task-" + datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
+    code = command(["submit", "--id", task_id, "--targets", target, "--prompt-file", str(home / "tasks/request.md")])
+    if code:
+        raise SystemExit(code)
+    print("Task ID: " + task_id, flush=True)
+    raise SystemExit(command(["wait", "--id", task_id, "--timeout", "240", "--brief"]))
+raise SystemExit(command(args))

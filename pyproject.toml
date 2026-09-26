@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "local-agent-bridge"
+version = "0.1.0a1"
+description = "Project-local mailbox for multiple AI CLI workers"
+requires-python = ">=3.11"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+
+[project.scripts]
+agent-bridge = "agent_bridge.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.data-files]
+"share/agent-bridge/skills/agent-bridge" = ["skills/agent-bridge/SKILL.md"]
+"share/agent-bridge/skills/agent-bridge/references" = ["skills/agent-bridge/references/usage.md"]
+"share/agent-bridge/skills/agent-bridge/agents" = ["skills/agent-bridge/agents/openai.yaml"]

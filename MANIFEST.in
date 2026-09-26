@@ -1,0 +1,9 @@
+include README.md CONTRIBUTING.md AGENTS.md CLAUDE.md LICENSE
+recursive-include docs *.md
+recursive-include examples *.json *.md
+recursive-include skills *.md *.yaml
+recursive-include tools *.py *.in
+recursive-include tests *.py
+recursive-include scripts *.py
+global-exclude *.py[cod]
+global-exclude __pycache__

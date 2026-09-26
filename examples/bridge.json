@@ -1,0 +1,31 @@
+{
+  "project": "..",
+  "state": ".agent-bridge",
+  "include": [
+    "README.md",
+    "src"
+  ],
+  "writable": [
+    "src"
+  ],
+  "parallel": 2,
+  "timeout": 600,
+  "endpoints": {
+    "claude": {
+      "adapter": "claude",
+      "command": [
+        "claude"
+      ],
+      "model": "haiku",
+      "parallel": 1
+    },
+    "codex": {
+      "adapter": "codex",
+      "command": [
+        "codex"
+      ],
+      "sandbox": "read-only",
+      "parallel": 1
+    }
+  }
+}

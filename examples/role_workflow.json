@@ -1,0 +1,14 @@
+{
+  "developer": {
+    "adapter": "codex",
+    "command": ["codex"],
+    "sandbox": "workspace-write"
+  },
+  "reviewer": {
+    "adapter": "claude",
+    "command": ["claude", "--tools", "Read", "--allowedTools", "Read(./**)"]
+  },
+  "checks": [
+    ["python", "-B", "-m", "unittest", "discover", "-s", "tests", "-v"]
+  ]
+}

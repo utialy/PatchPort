@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agent Bridge"
+  short_description: "Coordinate Claude and Codex CLI tasks across projects"
+  default_prompt: "Use $agent-bridge to send a task to the configured CLI workers and review their separate results."
