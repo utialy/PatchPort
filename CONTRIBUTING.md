@@ -30,3 +30,5 @@ python -m build
 ```
 
 The source distribution must include the project connection helpers, their launcher template, and both skill directories. The wheel contains the runtime and the agent-bridge skill.
+
+Maintainers importing reviewed patches from a separate checkout should follow [the update workflow](docs/MAINTAINER_UPDATES.md). This repository remains independently buildable; private development records are not required.

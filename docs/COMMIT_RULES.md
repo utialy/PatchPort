@@ -45,3 +45,7 @@ Run tests appropriate to the change. Documentation-only work does not require re
 The pre-commit hook checks all indexed files, including staged bytes rather than working-tree bytes. The commit-msg hook checks the subject format and ASCII message text. These checks do not prove that content is safe to publish or that its claims are correct. Do not bypass a failed check to complete an automated task; fix the issue or explain the blocker.
 
 Commits are local unless publication is requested. Never configure a remote, push, rewrite shared history, select a license, or add fabricated author identities as part of an ordinary commit.
+
+## Maintainer imports
+
+Follow [the maintainer update workflow](MAINTAINER_UPDATES.md) for reviewed patches from another checkout. Several development commits can form one coherent public commit. Do not copy private history or planning notes, and do not advance an import baseline past outstanding changes.

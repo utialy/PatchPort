@@ -13,6 +13,7 @@ Read README.md, docs/ARCHITECTURE.md, and CONTRIBUTING.md before changing code.
 - Report Windows, Linux/WSL, and macOS validation separately. A CI matrix is not evidence that each job passed.
 - Follow docs/COMMIT_RULES.md when committing. An authorized commit does not require another confirmation if its scope remains unchanged. Do not push or publish without authorization.
 - Update the relevant public documentation when behavior changes. Do not add session transcripts or personal handoff files.
+- For maintainer imports, follow docs/MAINTAINER_UPDATES.md. Accept reviewed changes only; preserve public-only files and keep this checkout independent of private development records.
 
 Install the package into an isolated environment, then run:
 
