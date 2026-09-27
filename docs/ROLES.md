@@ -1,5 +1,19 @@
 # Project connection and roles
 
+## Connect Codex and Claude Code
+
+Use the repository checkout or unpacked source distribution for this setup. The wheel alone does not include the project connector or peer-consult skills.
+
+1. Install PatchPort as described in the [README](../README.md#install), and install and authenticate the provider CLIs you want to use.
+2. In the project you want to work on, run `agent-bridge init`. Edit `bridge.json` to select existing input files, writable paths, and the Claude/Codex endpoint commands. Run `agent-bridge doctor` to check command resolution; it does not verify authentication. On Windows, follow the executable guidance in the README.
+3. From the PatchPort checkout, with its installed environment active, preview the connector using `python tools/connect_project.py --project /path/to/project`. Inspect the proposed actions, then repeat with `--apply`. Replace the example path with your project directory.
+4. In the connected project, start `python bridge.py run` in a separate terminal and leave it running. Use only one runner for this project's state. `python bridge.py status` should report a fresh runner and dispatch ready.
+5. Open Codex or Claude Code in that project and explicitly ask it to consult the configured peer. The connector installs `peer-consult` under both `.agents/skills` and `.claude/skills`. If discovery misses it, invoke the skill explicitly.
+
+For example, ask Codex: "Ask Claude to review the selected implementation for edge cases without editing files, and bring its answer back here." The main agent sends the question and relevant project context, waits for the result, and returns the peer's answer with its own assessment kept separate. You can request the reverse direction from Claude Code.
+
+The peer does not inherit your entire conversation. A consultation starts a separate provider CLI invocation and may consume account usage. Delegated workers do not recursively consult other agents. Any proposed changes remain in their working copy until you explicitly review and apply them.
+
 ## Connect another project
 
 The repository helper installs a project-local bridge.py launcher, role helpers, and peer-consult skills. Use an interpreter with agent_bridge installed:

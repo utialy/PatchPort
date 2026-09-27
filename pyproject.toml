@@ -5,11 +5,15 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "local-agent-bridge"
 version = "0.1.0a2"
-description = "Project-local mailbox for multiple AI CLI workers"
+description = "PatchPort: a local bridge for Codex and Claude Code consultation"
 requires-python = ">=3.11"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
+
+[project.urls]
+Repository = "https://github.com/utialy/PatchPort"
+Issues = "https://github.com/utialy/PatchPort/issues"
 
 [project.scripts]
 agent-bridge = "agent_bridge.cli:main"
