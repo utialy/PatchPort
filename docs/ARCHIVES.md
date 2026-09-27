@@ -1,6 +1,40 @@
 # Archived results and evidence
 
-Only archive readers are implemented. There is no archive writer, whole-flow cleanup command, or automatic migration of existing flows.
+Flow-lifetime locking, read-only cleanup planning, archive creation, and explicit archive continuation are implemented. Whole-flow deletion and automatic migration are not available.
+
+## Archive without deleting originals
+
+```sh
+python bridge.py role-manage archive-flow --id FLOW_ID --days 30
+python bridge.py role-manage archive-flow --id FLOW_ID --days 30 --plan-hash SHA256 --apply
+python bridge.py role-manage archive-flow --id FLOW_ID
+python bridge.py role-manage archive-flow --id FLOW_ID --evidence-source flow_metadata --evidence-path test-0.log
+```
+
+The first command returns the same read-only plan as `prune-flow`. Creation requires an eligible plan and its unchanged hash. It checks terminal role identity, retention, recovery backups, file types, configuration, and queue snapshots. Unknown files, active work, unsupported legacy flows, SQLite sidecars/WAL, and nonpositive projected cleanup savings block the candidate. Archiving itself consumes additional space and deletes nothing.
+
+The writer holds the flow, parent runner/promotion, and existing role-state runner/promotion locks. It preserves the original result.json, workspaces, and queue bytes. Evidence is copied byte-for-byte, deduplicated by SHA256, flushed, rechecked, and published under archive/. The ARCHIVE_ONLY cleanup journal records PREPARING, ARCHIVE_FAILED, or ARCHIVE_READY. On POSIX, relevant directories are also fsynced; portable Python does not provide the same directory-flush guarantee on Windows.
+
+After creation, `archive-flow` validates all referenced blobs and returns the historical snapshot. Evidence queries return UTF-8 or base64. The normal role-review/result/overview commands continue to read retained live artifacts. Usage comes only from the owning queues, never from a second archive total.
+
+## Continue an interrupted archive
+
+Read `operation` and `plan_hash` from the flow's cleanup.json, then inspect before applying:
+
+```sh
+python bridge.py role-manage archive-flow --id FLOW_ID --continue OPERATION
+python bridge.py role-manage archive-flow --id FLOW_ID --continue OPERATION --plan-hash ORIGINAL_SHA256 --apply
+```
+
+Continuation uses the original retention period; it rejects `--days`. Journals with resume_schema=1 retain the original inventory, configuration, queue fingerprints, records, and plan hash. The read-only inspection and locked execution recheck them. Missing archive files are created; existing evidence must already match. If publication finished but its final journal update failed, the archive is verified before marking it ready. Repeating an already completed operation is read-only.
+
+Changed sources or queues, corrupt partial files, unexpected entries, conflicting archive/staging directories, and legacy journals without a persisted plan are rejected. Even unrelated changes to the shared parent queue conservatively invalidate a pending operation. Failed output is retained for inspection; there is no automatic retry, overwrite, abandon, or deletion. Provider tasks are never rerun by continuation.
+
+Incomplete or corrupt archives block role promotion/recovery/prune. A fully verified ARCHIVE_READY snapshot permits normal live role management again; the snapshot remains historical and is not overwritten. `prune-flow --apply` remains unsupported.
+
+## Readers for compacted-layout fixtures
+
+The following readers also understand the ARCHIVED marker layout. The current writer does not replace result.json with that marker or compact workspaces.
 
 ```sh
 python bridge.py role-review --id FLOW_ID --role reviewer
@@ -33,4 +67,4 @@ Archived result views return usage=null with QUERY_OWNING_QUEUE. Use overview fo
 
 ## Planned cleanup
 
-The planned writer must preserve exact input, answer, diff, and test-log evidence before deleting duplicate copies. Private queues, locks, and a flow marker remain in place. Applied, incomplete, or damaged recovery backups block flow cleanup. A future command needs a read-only preview, plan hash, flow-lifetime lock, durable progress journal, and explicit continuation after interruption. These are design requirements, not current commands.
+Future whole-flow deletion must preserve exact evidence, private queue history, locks, and recoverability before removing selected copies. The existing archive-only continuation is not permission to delete. Applied, incomplete, or damaged recovery backups still block cleanup candidates.

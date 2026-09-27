@@ -33,6 +33,8 @@ The queue's cumulative claim count includes failures after claim. Pause stops ne
 
 The tools/ helpers connect another project to the installed runtime. role_flow runs development, host tests, and independent review in order. New roles share the parent queue and its pause/call cap. Historical private queues remain readable and are not migrated automatically.
 
+The flow lock covers host checks as well as provider stages. flow_cleanup builds a read-only plan using existing-lock probes and stable rollback-mode SQLite images deserialized into memory. Archive writes acquire the same flow/runner/promotion locks and bind progress to the original inventory and queue/configuration fingerprints. Explicit continuation fills missing evidence or finishes publication; it never reruns providers or deletes live artifacts. See [archive operations](ARCHIVES.md).
+
 role_review and project_overview provide read-only observations. role_manage performs explicitly selected promotion, recovery, or role-workspace cleanup. flow_archive reads verified historical evidence; it does not create archives or delete flows.
 
 Files and multiple databases do not form a globally atomic snapshot. A heartbeat or lock observation does not prove provider responsiveness. A working copy does not replace the provider sandbox.

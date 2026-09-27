@@ -2,7 +2,7 @@
 
 Agent Bridge runs Claude, Codex, and command-line workers from a project-local SQLite queue. Each task receives an explicit working copy. Changes stay in that copy until you review and apply selected paths.
 
-Version 0.1.0a1 is an alpha release. The runtime requires Python 3.11 or later and uses only the standard library. Provider CLIs must be installed and authenticated separately.
+Version 0.1.0a2 is an alpha release. The runtime requires Python 3.11 or later and uses only the standard library. Provider CLIs must be installed and authenticated separately.
 
 ## Install
 
@@ -21,7 +21,33 @@ agent-bridge --help
 
 `python -m agent_bridge` exposes the same commands. See [validation](docs/VALIDATION.md) for the environments actually tested.
 
-## Run a task
+## Try it without a provider account
+
+In an empty directory, save this as `bridge.json`:
+
+```json
+{
+  "project": ".",
+  "state": ".agent-bridge",
+  "include": ["request.md"],
+  "writable": ["request.md"],
+  "endpoints": {
+    "mock": {"adapter": "command", "command": ["python", "-c", "print('BRIDGE_OK')"]}
+  }
+}
+```
+
+Create `request.md` with the text `Return the marker`. With the installed virtual environment active, run:
+
+```sh
+agent-bridge submit --id first-run --targets mock --prompt-file request.md
+agent-bridge run --once
+agent-bridge result --id first-run --brief
+```
+
+The result should contain `DONE` and `BRIDGE_OK`. This example runs a local Python command and makes no provider calls. Submission queues the task; `run` executes it. Use a new ID to try again.
+
+## Run a provider task
 
 Run these commands from the project you want the workers to inspect:
 
@@ -68,6 +94,7 @@ Replacement is atomic per file, not across a group of files. A working copy is n
 - [Usage and preserved answers](docs/USAGE.md)
 - [Project connection and development/review roles](docs/ROLES.md)
 - [Archived result and evidence readers](docs/ARCHIVES.md)
+- [Release notes and known limitations](CHANGELOG.md)
 - [Architecture](docs/ARCHITECTURE.md) and [remaining work](docs/ROADMAP.md)
 - [Contributing](CONTRIBUTING.md) and [commit rules](docs/COMMIT_RULES.md)
 

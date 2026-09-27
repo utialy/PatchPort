@@ -16,6 +16,7 @@ from agent_bridge.runner import run, argv_for
 from agent_bridge.storage import Store, atomic_json, identifier, load_config
 from agent_bridge.usage import report as usage_report
 from agent_bridge.health import inspect as runner_status
+import flow_lifecycle
 
 
 def controls(config):
@@ -85,7 +86,21 @@ def stage(flow, name, config, prompt, expected=None, *, parent):
 
 def develop_review(project, prompt, flow_id=None, *, allow_mock=False):
     project = Path(project).resolve()
+    base = load_config(workspace.safe(project, 'bridge.json'))
+    if base['root'] != project:
+        raise ValueError('Role workflow must be launched at the configured project root')
+    if Path.cwd().resolve().is_relative_to(base['state'] / 'workspaces') or Path.cwd().resolve().is_relative_to(project / '.role-flows'):
+        raise ValueError('Workers cannot start role workflows')
+    flow_id = identifier(flow_id or 'flow-' + uuid.uuid4().hex[:16])
+    with flow_lifecycle.lock(project, base, flow_id):
+        return _develop_review(project, prompt, flow_id, allow_mock=allow_mock, locked_base=base)
+
+
+def _develop_review(project, prompt, flow_id, *, allow_mock=False, locked_base=None):
+    project = Path(project).resolve()
     base = load_config(project / 'bridge.json')
+    if locked_base is not None and base != locked_base:
+        raise ValueError('Project config changed while acquiring the flow lock')
     if base['root'] != project:
         raise ValueError('Role workflow must be launched at the configured project root')
     if Path.cwd().resolve().is_relative_to(base['state'] / 'workspaces') or Path.cwd().resolve().is_relative_to(project / '.role-flows'):
@@ -109,7 +124,8 @@ def develop_review(project, prompt, flow_id=None, *, allow_mock=False):
     flow_id = identifier(flow_id or 'flow-' + uuid.uuid4().hex[:16])
     flow = project / '.role-flows' / flow_id
     flow.mkdir(parents=True, exist_ok=False)
-    output = dict(id=flow_id, state='PREPARING', queue_mode='SHARED_PARENT', automatic_promotion=False, task_success='NOT_EVALUATED', max_provider_calls=2)
+    output = dict(id=flow_id, state='PREPARING', queue_mode='SHARED_PARENT', flow_lock_schema=flow_lifecycle.FLOW_LOCK_SCHEMA,
+                  automatic_promotion=False, task_success='NOT_EVALUATED', max_provider_calls=2)
     def save(): atomic_json(flow / 'result.json', output)
     save()
     print('Workflow ' + flow_id + ': ' + str(flow), file=sys.stderr, flush=True)
@@ -240,7 +256,7 @@ def main():
             if not args.prompt_file:
                 raise ValueError('--prompt-file is required to start a workflow')
             result = develop_review(args.project, args.prompt_file.read_text(encoding='utf-8-sig'), args.id)
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, RuntimeError) as exc:
         print(json.dumps(dict(state='NOT_STARTED', error=str(exc)), ensure_ascii=False))
         return 2
     print(json.dumps(result_view(result), ensure_ascii=False, indent=2))

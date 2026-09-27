@@ -2,7 +2,7 @@
 
 ## Flow cleanup
 
-Archive readers and their role-review/result/overview integrations exist. Next steps are a flow-lifetime lock and a read-only cleanup preview, followed by the archive writer, explicit deletion, and interrupted-operation handling. Preserve private queue history and recovery data throughout.
+Archive readers, flow-lifetime locks, read-only planning, archive-only writing, and explicit continuation exist in 0.1.0a2. Whole-flow deletion, archive expiry, and interrupted deletion remain future work. Preserve private queue history and recovery data throughout. The first alpha release does not depend on these deletion features.
 
 ## Usage budgets
 

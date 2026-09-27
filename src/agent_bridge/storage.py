@@ -1,9 +1,11 @@
 """Durable local queue. SQLite transactions are the publication/claim boundary."""
 import json
+import errno
 import os
 from pathlib import Path
 import re
 import sqlite3
+import stat
 import sys
 import time
 import uuid
@@ -23,6 +25,24 @@ def identifier(value):
     if not isinstance(value, str) or not ID.fullmatch(value):
         raise ValueError("Invalid identifier")
     return value
+
+def sync_directory(path):
+    """Flush directory entries on POSIX; Windows has no portable directory fsync."""
+    if os.name != 'nt':
+        descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+
+def durable_write(path, data):
+    """Create a new regular file exclusively and flush its bytes before returning."""
+    with Path(path).open('xb') as stream:
+        stream.write(data)
+        stream.flush()
+        os.fsync(stream.fileno())
+
 
 def atomic_json(path, value):
     path = Path(path)
@@ -196,6 +216,70 @@ class Transaction:
             self.db.rollback() if typ else self.db.commit()
         finally:
             self.db.close()
+
+
+def probe_lock(path):
+    """Observe an existing lock without creating or modifying its file."""
+    path = Path(path)
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return 'MISSING'
+    if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+            or getattr(info, 'st_file_attributes', 0) & 0x400):
+        raise ValueError('Unsafe lock file')
+    with path.open('rb') as stream:
+        try:
+            if os.name == 'nt':
+                import msvcrt
+                msvcrt.locking(stream.fileno(), msvcrt.LK_NBRLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            if exc.errno in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
+                return 'LOCKED'
+            raise
+        else:
+            if os.name == 'nt':
+                msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+    return 'FREE'
+
+
+def readonly_database(path):
+    """Read a stable rollback-mode image into memory; never open SQLite on the source."""
+    path = Path(path)
+    def checked_stat():
+        for suffix in ('-wal', '-shm', '-journal'):
+            sidecar = Path(str(path) + suffix)
+            if sidecar.exists() or sidecar.is_symlink():
+                raise ValueError('SQLITE_SIDECAR: inspect journal/WAL before preview')
+        info = path.lstat()
+        if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                or getattr(info, 'st_file_attributes', 0) & 0x400):
+            raise ValueError('Unsafe database file')
+        return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
+    before = checked_stat()
+    data = path.read_bytes()
+    if (checked_stat() != before or data != path.read_bytes() or checked_stat() != before):
+        raise ValueError('Database changed during preview')
+    if data[:16] != b'SQLite format 3\x00' or data[18:20] != b'\x01\x01':
+        raise ValueError('Only a complete rollback-mode SQLite database can be previewed')
+    db = sqlite3.connect(':memory:')
+    try:
+        if not hasattr(db, 'deserialize'):
+            raise RuntimeError('SQLite deserialize support is required for a non-writing preview')
+        db.deserialize(data)
+        db.execute('PRAGMA query_only=ON')
+        if db.execute('PRAGMA quick_check').fetchone()[0] != 'ok':
+            raise ValueError('Damaged database image')
+        db.row_factory = sqlite3.Row
+        return db
+    except Exception:
+        db.close()
+        raise
 
 class FileLock:
     def __init__(self, path): self.path, self.file = Path(path), None

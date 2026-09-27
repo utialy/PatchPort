@@ -210,6 +210,14 @@ def load_view(project, flow):
             or journal.get('archive_digest') != manifest['archive_digest']
             or not isinstance(journal.get('state'), str) or journal['state'] not in ARTIFACT_STATES):
         raise ValueError('Invalid archive cleanup journal')
+    verify_blobs(archive, manifest)
+    return dict(records=records, entries=manifest['entries'], archive_digest=manifest['archive_digest'],
+                artifact_state=journal['state'], evidence_status='AVAILABLE',
+                artifact_source='ARCHIVE', current_files_checked=False)
+
+
+def verify_blobs(archive, manifest):
+    """Verify every distinct blob, including all referenced sizes."""
     verified = {}
     for entry in manifest['entries']:
         digest = entry['sha256']
@@ -226,9 +234,24 @@ def load_view(project, flow):
             verified[digest] = size
         if verified[digest] != entry['size']:
             raise ValueError('Evidence size mismatch')
+
+
+def load_snapshot(project, flow):
+    """Read a completed archive-only operation without requiring a cleanup marker."""
+    archive, manifest, records = load_archive(project, flow)
+    validate_records(records, flow, manifest['entries'])
+    journal = _json(_read(archive.parent, 'cleanup.json'))
+    if (type(journal.get('schema')) is not int or journal['schema'] != 1
+            or journal.get('flow') != flow or journal.get('mode') != 'ARCHIVE_ONLY'
+            or journal.get('state') != 'ARCHIVE_READY'
+            or journal.get('archive_digest') != manifest['archive_digest']):
+        raise ValueError('Archive-only operation is incomplete or invalid')
+    identifier(journal.get('operation'))
+    _hash(journal.get('plan_hash'))
+    verify_blobs(archive, manifest)
     return dict(records=records, entries=manifest['entries'], archive_digest=manifest['archive_digest'],
-                artifact_state=journal['state'], evidence_status='AVAILABLE',
-                artifact_source='ARCHIVE', current_files_checked=False)
+                artifact_state='ARCHIVE_READY', evidence_status='AVAILABLE', artifact_source='ARCHIVE',
+                current_files_checked=False, originals_retained=True, deleted_files=0)
 
 
 def role_view(view, flow, role):

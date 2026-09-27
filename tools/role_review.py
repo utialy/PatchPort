@@ -46,7 +46,7 @@ def flow_header(project, flow_id):
     return project, base, flow, saved
 
 
-def resolve(project, flow_id, role):
+def resolve(project, flow_id, role, *, database_reader=None):
     if role not in ('developer', 'reviewer'):
         raise ValueError('Unknown role')
     project, base, flow, saved = flow_header(project, flow_id)
@@ -73,7 +73,8 @@ def resolve(project, flow_id, role):
     if shared and metadata.get('queue_state') != str(queue):
         raise ValueError('Unexpected queue path')
     db_path = safe(project, (queue / 'queue.sqlite3').relative_to(project).as_posix())
-    with contextlib.closing(sqlite3.connect(db_path.as_uri() + '?mode=ro', uri=True)) as db:
+    with contextlib.closing(database_reader(db_path) if database_reader else
+                           sqlite3.connect(db_path.as_uri() + '?mode=ro', uri=True)) as db:
         db.row_factory = sqlite3.Row
         row = db.execute('SELECT * FROM tasks WHERE id=?', (task,)).fetchone()
         if row is None or row['endpoint'] != role:

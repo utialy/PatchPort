@@ -81,6 +81,9 @@ def plan_install(project, python=None, config_template=None, roles_template=None
     contents['role_review.py'] = (ROOT/'tools/role_review.py').read_bytes()
     contents['role_manage.py'] = (ROOT/'tools/role_manage.py').read_bytes()
     contents['flow_archive.py'] = (ROOT/'tools/flow_archive.py').read_bytes()
+    contents['flow_lifecycle.py'] = (ROOT/'tools/flow_lifecycle.py').read_bytes()
+    contents['flow_cleanup.py'] = (ROOT/'tools/flow_cleanup.py').read_bytes()
+    contents['flow_archive_writer.py'] = (ROOT/'tools/flow_archive_writer.py').read_bytes()
     for location in ('.agents/skills/peer-consult', '.claude/skills/peer-consult'):
         for relative in ('SKILL.md','references/usage.md','references/roles.md'):
             contents[location+'/'+relative] = (ROOT/'skills/peer-consult'/relative).read_bytes()
@@ -111,8 +114,8 @@ def install(plan, apply=False):
     report=dict(project=str(plan['project']),python=str(plan['python']),apply=apply,ok=plan['ok'],roles_configured=plan['roles'],actions=plan['actions'],runner_started=False,ai_calls=0)
     if not apply or not plan['ok']: return report
     env=dict(os.environ);env.pop('PYTHONPATH',None)
-    checked=subprocess.run([str(plan['python']),'-c','import agent_bridge; print(agent_bridge.__version__)'],env=env,capture_output=True,timeout=15)
-    if checked.returncode:raise ValueError('Selected Python cannot import installed agent_bridge')
+    checked=subprocess.run([str(plan['python']),'-c','import agent_bridge; from agent_bridge.storage import probe_lock, readonly_database, durable_write, sync_directory; print(agent_bridge.__version__)'],env=env,capture_output=True,timeout=15)
+    if checked.returncode:raise ValueError('Selected Python needs the current agent_bridge runtime with flow preview support')
     project=plan['project']
     # Recheck all intended destinations before the first project write.
     for item in plan['actions']:
