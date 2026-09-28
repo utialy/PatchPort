@@ -55,7 +55,7 @@ def locked(project, flow, role, task):
             db_path = safe(first['project'], (state / 'queue.sqlite3').relative_to(first['project']).as_posix())
             if db_path.exists():
                 with contextlib.closing(sqlite3.connect(db_path.as_uri() + '?mode=ro', uri=True)) as db:
-                    active = db.execute("SELECT COUNT(*) FROM tasks WHERE state IN ('QUEUED','RUNNING','ROLE_QUEUED','ROLE_RUNNING','PLAN_QUEUED','PLAN_RUNNING')").fetchone()[0]
+                    active = db.execute("SELECT COUNT(*) FROM tasks WHERE state IN ('QUEUED','RUNNING','ROLE_QUEUED','ROLE_RUNNING','PLAN_QUEUED','PLAN_RUNNING','SUMMARY_QUEUED','SUMMARY_RUNNING')").fetchone()[0]
                 if active:
                     raise ValueError('Flow has active private tasks')
         yield current

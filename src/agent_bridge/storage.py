@@ -126,7 +126,12 @@ class Store:
             raise ValueError("Targets must be unique configured endpoints")
         ids = [identifier(batch + "--" + t) for t in targets]
         plan_json = json.dumps(context_plan, ensure_ascii=False, allow_nan=False) if context_plan is not None else None
+        summary_plan = (isinstance(context_plan, dict)
+                        and isinstance(context_plan.get('payload'), dict)
+                        and context_plan['payload'].get('schema') == 2)
         if role is not None:
+            if summary_plan:
+                raise ValueError('Role workflows require full/omit plans; summary plans are separate tasks')
             identifier(role['flow'])
             if len(targets) != 1 or role['role'] not in ('developer', 'reviewer') or targets != [role['role']] or plan_json is None:
                 raise ValueError('Role submission requires one role and a frozen context plan')
@@ -134,7 +139,7 @@ class Store:
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             for id_, target in zip(ids, targets):
-                db.execute("INSERT INTO tasks VALUES (?,?,?,?,?,?,?,?,?)", (id_, batch, target, prompt, "ROLE_QUEUED" if role is not None else "PLAN_QUEUED" if plan_json else "QUEUED", time.time(), None, None, None))
+                db.execute("INSERT INTO tasks VALUES (?,?,?,?,?,?,?,?,?)", (id_, batch, target, prompt, "ROLE_QUEUED" if role is not None else "SUMMARY_QUEUED" if summary_plan else "PLAN_QUEUED" if plan_json else "QUEUED", time.time(), None, None, None))
                 if plan_json:
                     db.execute("INSERT INTO context_plans VALUES (?,?)", (id_, plan_json))
                 if role is not None:
@@ -151,9 +156,9 @@ class Store:
             for row in rows:
                 if row["state"] in ("ROLE_QUEUED", "ROLE_RUNNING"):
                     row['role_task_required'] = True
-                if row["state"] in ("PLAN_QUEUED", "PLAN_RUNNING", "ROLE_QUEUED", "ROLE_RUNNING"):
+                if row["state"] in ("PLAN_QUEUED", "PLAN_RUNNING", "ROLE_QUEUED", "ROLE_RUNNING", "SUMMARY_QUEUED", "SUMMARY_RUNNING"):
                     row["context_plan_required"] = True
-                    row["state"] = row["state"][5:]
+                    row["state"] = row["state"].split('_', 1)[1]
             return rows
     def context_plan(self, id_):
         with self.connect() as db:
@@ -172,7 +177,7 @@ class Store:
             control = db.execute("SELECT * FROM control WHERE id=1").fetchone()
             if control["paused"] or (control["max_calls"] is not None and control["calls_started"] >= control["max_calls"]):
                 return False
-            claimed = db.execute("UPDATE tasks SET state=CASE state WHEN 'PLAN_QUEUED' THEN 'PLAN_RUNNING' WHEN 'ROLE_QUEUED' THEN 'ROLE_RUNNING' ELSE 'RUNNING' END,started=? WHERE id=? AND state IN ('QUEUED','PLAN_QUEUED','ROLE_QUEUED')", (time.time(), id_)).rowcount == 1
+            claimed = db.execute("UPDATE tasks SET state=CASE state WHEN 'PLAN_QUEUED' THEN 'PLAN_RUNNING' WHEN 'ROLE_QUEUED' THEN 'ROLE_RUNNING' WHEN 'SUMMARY_QUEUED' THEN 'SUMMARY_RUNNING' ELSE 'RUNNING' END,started=? WHERE id=? AND state IN ('QUEUED','PLAN_QUEUED','ROLE_QUEUED','SUMMARY_QUEUED')", (time.time(), id_)).rowcount == 1
             if claimed:
                 db.execute("UPDATE control SET calls_started=calls_started+1 WHERE id=1")
             return claimed
@@ -206,7 +211,7 @@ class Store:
             return dict(row) if row else None
     def recover(self):
         with self.connect() as db:
-            db.execute("UPDATE tasks SET state='INTERRUPTED',finished=?,result=? WHERE state IN ('RUNNING','PLAN_RUNNING','ROLE_RUNNING')", (time.time(), json.dumps({"error":"Runner interrupted; inspect artifacts; retry only with a new ID"})))
+            db.execute("UPDATE tasks SET state='INTERRUPTED',finished=?,result=? WHERE state IN ('RUNNING','PLAN_RUNNING','ROLE_RUNNING','SUMMARY_RUNNING')", (time.time(), json.dumps({"error":"Runner interrupted; inspect artifacts; retry only with a new ID"})))
 
 class Transaction:
     def __init__(self, db): self.db = db

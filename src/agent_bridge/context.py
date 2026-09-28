@@ -83,8 +83,8 @@ def preview(config, prompt="", copied=None):
     return report
 
 
-def _report(config, prompt, items, missing):
-    prompt_bytes = len((PREFIX + prompt).encode("utf-8"))
+def _report(config, prompt, items, missing, *, rendered=None):
+    prompt_bytes = len((PREFIX + prompt if rendered is None else rendered).encode("utf-8"))
     total_bytes = sum(item["bytes"] for item in items) + prompt_bytes
     summary = dict(file_count=len(items), file_bytes=total_bytes-prompt_bytes,
                    prompt_bytes=prompt_bytes, total_bytes=total_bytes,
@@ -115,6 +115,9 @@ def plan_preview(config, prompt, path=None, *, plan=None):
     if path is not None:
         with open(path, encoding="utf-8-sig") as source:
             plan = json.load(source, object_pairs_hook=_unique_object, parse_constant=invalid_constant)
+    if isinstance(plan, dict) and plan.get("schema") == 2:
+        from .summaries import preview as summary_preview
+        return summary_preview(config, prompt, plan)
     if (not isinstance(plan, dict) or set(plan) != {"schema", "files"}
             or type(plan["schema"]) is not int or plan["schema"] != 1
             or not isinstance(plan["files"], list)):
@@ -169,6 +172,9 @@ def _settings(config):
 
 
 def freeze_plan(config, prompt, inventory, targets):
+    if inventory.get("plan", {}).get("schema") == 2:
+        from .summaries import freeze
+        return freeze(config, prompt, inventory, targets)
     plan = dict(schema=1, files=sorted(
         [dict(path=i["path"], mode=mode, reason=i["reason"])
          for mode, group in (("full", "selected"), ("omit", "omitted")) for i in inventory[group]],
@@ -195,8 +201,11 @@ def check_plan(config, prompt, saved, endpoint, copied=None):
     if not isinstance(saved, dict) or set(saved) != {"payload", "plan_sha256"}:
         raise ValueError("Missing or invalid stored context plan")
     payload = saved["payload"]
-    if not isinstance(payload, dict) or _hash(payload) != saved["plan_sha256"] or payload.get("schema") != 1:
+    if not isinstance(payload, dict) or _hash(payload) != saved["plan_sha256"] or type(payload.get("schema")) is not int or payload.get("schema") not in (1, 2):
         raise ValueError("Stored context plan integrity failure")
+    if payload["schema"] == 2:
+        from .summaries import check
+        return check(config, prompt, saved, endpoint, copied)
     if (payload.get("settings") != _settings(config)
             or payload.get("endpoints", {}).get(endpoint) != config["endpoints"].get(endpoint)
             or payload.get("prompt_sha256") != hashlib.sha256((PREFIX + prompt).encode("utf-8")).hexdigest()):
@@ -219,3 +228,10 @@ def check_plan(config, prompt, saved, endpoint, copied=None):
 def enforce(report):
     if not report["ok"]:
         raise ValueError("Context budget exceeded: " + ", ".join(item["limit"] for item in report["exceeded"]))
+
+
+def render_prompt(prompt, saved=None):
+    if saved is not None and saved["payload"]["schema"] == 2:
+        from .summaries import render
+        return render(prompt, saved["payload"]["summaries"])
+    return PREFIX + prompt

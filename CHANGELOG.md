@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Add `agent-bridge connect` with wheel-bundled installation assets, preview by default, conflict checks, and explicit backup/replacement. Keep the standalone connector compatible.
+- Add reviewed summary plans with frozen source/body/record hashes, explicit metadata inputs, and reference-only prompt rendering. Preserve full required rules and writable files.
+- Keep summary tasks inaccessible to older runners through separate persisted queue states.
+- Preserve exact UTF-8 prompt bytes on Windows so delivered input matches the budget.
+
+These changes are available in source builds; the published 0.1.0a2 release assets are unchanged. No automatic summary generation, provider retries, session resumption, token/cost enforcement, or whole-flow deletion is added.
+
 ## 0.1.0a2
 
 Alpha release for local CLI task orchestration. APIs and archive formats may change.

@@ -2,11 +2,11 @@
 
 ## Connect Codex and Claude Code
 
-Use the repository checkout or unpacked source distribution for this setup. The wheel alone does not include the project connector or peer-consult skills.
+Current source builds provide `agent-bridge connect` and bundle its installation assets in the wheel. The published 0.1.0a2 wheel predates this command; install the current source version before using it.
 
 1. Install PatchPort as described in the [README](../README.md#install), and install and authenticate the provider CLIs you want to use.
 2. In the project you want to work on, run `agent-bridge init`. Edit `bridge.json` to select existing input files, writable paths, and the Claude/Codex endpoint commands. Run `agent-bridge doctor` to check command resolution; it does not verify authentication. On Windows, follow the executable guidance in the README.
-3. From the PatchPort checkout, with its installed environment active, preview the connector using `python tools/connect_project.py --project /path/to/project`. Inspect the proposed actions, then repeat with `--apply`. Replace the example path with your project directory.
+3. With the installed environment active, preview `agent-bridge connect --project /path/to/project`. Inspect the proposed actions, then repeat with `--apply`. Replace the example path with your project directory. A current wheel installation does not require the source checkout at runtime.
 4. In the connected project, start `python bridge.py run` in a separate terminal and leave it running. Use only one runner for this project's state. `python bridge.py status` should report a fresh runner and dispatch ready.
 5. Open Codex or Claude Code in that project and explicitly ask it to consult the configured peer. The connector installs `peer-consult` under both `.agents/skills` and `.claude/skills`. If discovery misses it, invoke the skill explicitly.
 
@@ -16,14 +16,14 @@ The peer does not inherit your entire conversation. A consultation starts a sepa
 
 ## Connect another project
 
-The repository helper installs a project-local bridge.py launcher, role helpers, and peer-consult skills. Use an interpreter with agent_bridge installed:
+The connector installs a project-local bridge.py launcher, role helpers, and peer-consult skills. Use an interpreter with the updated agent_bridge package installed:
 
 ```sh
-python tools/connect_project.py --project /path/to/project
-python tools/connect_project.py --project /path/to/project --apply
+agent-bridge connect --project /path/to/project
+agent-bridge connect --project /path/to/project --apply
 ```
 
-The first command previews create/update/keep/conflict actions. Existing configuration, rules, and request files are preserved. New projects can supply reviewed --config-template and --roles-template paths. The helper does not create the target project or start a runner.
+The first command previews create/update/keep/conflict actions. Existing configuration, rules, and request files are preserved. New projects can supply reviewed --config-template and --roles-template paths. Use --python to choose an installed runtime. The connector does not create the target project, log in, call a provider, or start a runner. Target configuration comes from --project; do not specify an alternative global --config. The repository script tools/connect_project.py remains a compatible entry point to the same logic.
 
 Managed file hashes live in .bridge-integration.json. Changed local files cause a conflict. --adopt-existing --apply explicitly backs up and replaces conflicting managed integration files. Multi-file installation is not atomic; inspect a partial-install error before retrying.
 

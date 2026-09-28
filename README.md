@@ -20,7 +20,7 @@ Repository: [utialy/PatchPort](https://github.com/utialy/PatchPort).
 
 ## Install
 
-Clone the repository (or unpack the source distribution) to get the project connector and peer-consult skills:
+Clone the repository (or unpack the source distribution) to install the current source version:
 
 ```sh
 git clone https://github.com/utialy/PatchPort.git
@@ -43,6 +43,15 @@ agent-bridge --help
 `python -m agent_bridge` exposes the same commands. See [validation](docs/VALIDATION.md) for the environments actually tested.
 
 ## Connect Codex and Claude Code
+
+Current source builds include the project connector and peer-consult assets in the wheel. With your project configuration ready, preview and then apply the connection:
+
+```sh
+agent-bridge connect --project /path/to/project
+agent-bridge connect --project /path/to/project --apply
+```
+
+Connection only installs local files and checks the selected runtime. It does not log in, call a provider, or start a runner. The previously published 0.1.0a2 wheel predates this command; install the current source version to use it. Provider terms and account limits still apply.
 
 Follow the [project connection and peer consultation guide](docs/ROLES.md#connect-codex-and-claude-code) to configure your project, install the peer-consult skills, and start a runner. Then, from the connected project, ask either agent something like:
 
@@ -79,6 +88,8 @@ agent-bridge result --id first-run --brief
 The result should contain `DONE` and `BRIDGE_OK`. This example runs a local Python command and makes no provider calls. Submission queues the task; `run` executes it. Use a new ID to try again.
 
 ## Run a provider task
+
+For explicitly reviewed historical context, use a [version 2 summary plan](docs/CONTEXT_SUMMARIES.md). Source, summary body, and record hashes are frozen at submission and checked before execution. Required rules and writable source files remain full input.
 
 Run these commands from the project you want the workers to inspect:
 

@@ -7,7 +7,7 @@ import re
 import subprocess
 
 ROOT_FILES = {'.gitignore', '.gitattributes', 'README.md', 'AGENTS.md', 'CLAUDE.md',
-              'CONTRIBUTING.md', 'LICENSE', 'pyproject.toml', 'MANIFEST.in', 'CHANGELOG.md'}
+              'CONTRIBUTING.md', 'LICENSE', 'pyproject.toml', 'MANIFEST.in', 'CHANGELOG.md', 'setup.py'}
 ROOT_DIRS = {'src', 'tests', 'tools', 'scripts', 'skills', 'examples', 'docs', '.github', '.githooks'}
 EXCLUDED = {'.git', '.venv', '__pycache__', '.bridge', '.agent-bridge', '.role-flows',
             '.bridge-requests', '.bridge-integration-backups', 'workspaces', 'build', 'dist', 'node_modules'}

@@ -69,9 +69,10 @@ def execute(config, row, stop_event, store=None):
         result["context"] = inventory
         atomic_json(home / "context.json", inventory)
         context.enforce(inventory)
-        prompt = context.PREFIX + row["prompt"]
+        prompt = context.render_prompt(row["prompt"], saved)
         prompt_file = home / "prompt.txt"
-        prompt_file.write_text(prompt, encoding="utf-8")
+        # Preserve the bytes counted by the input budget on every platform.
+        prompt_file.write_bytes(prompt.encode("utf-8"))
         reply = home / "provider-reply.txt"
         spec = dict(argv=argv_for(endpoint, reply), cwd=str(home / "project"), prompt_file=str(prompt_file), exit_file=str(home / "exit-code.txt"))
         atomic_json(home / "process.json", spec)

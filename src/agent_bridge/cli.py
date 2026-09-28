@@ -22,14 +22,17 @@ def main(argv=None):
     sub = parser.add_subparsers(dest="action",required=True)
     sub.add_parser("init")
     sub.add_parser("doctor")
+    from .connect import add_arguments, execute as connect_project
+    connection = sub.add_parser("connect", help="Preview or install local project integration; no login or AI calls")
+    add_arguments(connection)
     submit = sub.add_parser("submit")
     submit.add_argument("--id", required=True)
     submit.add_argument("--targets", nargs="+", required=True)
     submit.add_argument("--prompt-file", required=True)
-    submit.add_argument("--context-plan", help="Freeze and submit a full/omit selection plan")
+    submit.add_argument("--context-plan", help="Freeze a full/omit plan or a reviewed summary plan")
     preview = sub.add_parser("context", help="Preview selected input and budgets without submitting or calling a provider")
     preview.add_argument("--prompt-file", required=True)
-    preview.add_argument("--context-plan", help="Preview full/omit selection only; not applied to submit or run")
+    preview.add_argument("--context-plan", help="Preview full/omit or reviewed summary selection without submitting")
     worker = sub.add_parser("run"); worker.add_argument("--once",action="store_true")
     sub.add_parser("status")
     usage = sub.add_parser("usage", help="Report recorded usage; missing values remain unknown")
@@ -56,6 +59,10 @@ def main(argv=None):
     recover = sub.add_parser("recover"); recover.add_argument("--task",required=True); recover.add_argument("--backup",required=True); recover.add_argument("--apply",action="store_true")
     args = parser.parse_args(argv)
     try:
+        if args.action == "connect":
+            if args.config != "bridge.json":
+                raise ValueError("connect uses --project and --config-template, not --config")
+            return connect_project(args)
         if args.action == "init":
             path=Path(args.config)
             if path.exists(): raise ValueError("Config exists; refusing overwrite")

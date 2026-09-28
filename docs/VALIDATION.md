@@ -1,5 +1,13 @@
 # Validation
 
+## Current source changes: connection CLI and reviewed summaries
+
+On 2026-09-28, a wheel built from the updated public source was installed into a fresh Windows environment. Python 3.14.6 ran 245 tests: 243 passed and two permission-dependent symlink tests were skipped (88.262 seconds). The public policy checks passed. The native console preview and module-based connection installation also passed from a temporary project outside the checkout, without creating a queue or calling a provider.
+
+The wheel contains the summary runtime and 12 connection assets. The source archive includes setup.py and the summary guide. Packaging checks found no private inquiry, handoff, or operational files. No real provider calls were made. Linux and macOS were not rerun locally for this public import; the previous release results below do not establish coverage of these changes. These source changes have not been published as replacement 0.1.0a2 release assets.
+
+## Published 0.1.0a2
+
 Version 0.1.0a2 was validated on 2026-09-27 using a wheel installed in fresh virtual environments. Test folders contained helpers, skills, scripts, and tests, but no runtime source tree. The imported runtime came from site-packages and matched the public source bytes.
 
 | Environment | Unit tests | Entry points and console task |

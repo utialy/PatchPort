@@ -37,7 +37,7 @@ The budget does not include everything a provider may later read, its system ins
 }
 ```
 
-Every candidate file from include must appear exactly once. Use only full or omit and provide a nonempty reason. Duplicate JSON keys, missing or extra paths, links, aliases, and unsupported summary mode are rejected.
+Every candidate file from include must appear exactly once. In schema=1, use only full or omit and provide a nonempty reason. Duplicate JSON keys, missing or extra paths, links, aliases, and summary mode in v1 are rejected. Reviewed summaries use a separate [schema=2 plan](CONTEXT_SUMMARIES.md).
 
 Pass the plan to both preview and submission:
 

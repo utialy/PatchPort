@@ -16,7 +16,7 @@ from flow_archive import PHASES, is_archived, load_view, validate_records, _path
 import flow_lifecycle
 from role_review import object_json, resolve, safe
 
-ACTIVE = {'QUEUED', 'RUNNING', 'PLAN_QUEUED', 'PLAN_RUNNING', 'ROLE_QUEUED', 'ROLE_RUNNING'}
+ACTIVE = {'QUEUED', 'RUNNING', 'PLAN_QUEUED', 'PLAN_RUNNING', 'ROLE_QUEUED', 'ROLE_RUNNING', 'SUMMARY_QUEUED', 'SUMMARY_RUNNING'}
 STATE_FILES = {'queue.sqlite3', 'queue.sqlite3-wal', 'queue.sqlite3-shm', 'queue.sqlite3-journal',
                'runner.lock', 'promotion.lock', 'health.json'}
 TASK_FILES = {'baseline.json', 'changes.json', 'context.json', 'prompt.txt', 'process.json',

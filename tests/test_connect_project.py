@@ -1,5 +1,8 @@
 import json
 from pathlib import Path
+import contextlib
+import io
+import os
 import sys
 import subprocess
 import tempfile
@@ -7,6 +10,7 @@ import unittest
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'tools'))
 import connect_project
 from agent_bridge.storage import atomic_json
+from agent_bridge.cli import main
 
 class ConnectProjectTests(unittest.TestCase):
     def setUp(self):
@@ -77,4 +81,61 @@ class ConnectProjectTests(unittest.TestCase):
         role=self.parent/'roles.json'
         atomic_json(role,dict(developer=dict(adapter='command',command=[sys.executable]),reviewer=dict(adapter='claude',command=['claude','--tools','Read,Edit']),checks=[[sys.executable,'-c','pass']]))
         with self.assertRaises(ValueError):self.plan(roles_template=role)
+    def cli(self, *extra):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            code = main(['connect', '--project', str(self.project),
+                         '--config-template', str(self.template), *extra])
+        return code, json.loads(output.getvalue())
+
+    def test_cli_preview_matches_legacy_without_state_or_provider_calls(self):
+        before = sorted(str(p.relative_to(self.project)) for p in self.project.rglob('*'))
+        code, result = self.cli()
+        self.assertEqual(code, 0)
+        self.assertEqual(result, connect_project.install(self.plan()))
+        self.assertEqual(result['ai_calls'], 0)
+        self.assertFalse(result['runner_started'])
+        self.assertEqual(before, sorted(str(p.relative_to(self.project)) for p in self.project.rglob('*')))
+
+    def test_cli_install_conflict_and_repeat(self):
+        (self.project/'bridge.py').write_text('custom launcher')
+        code, result = self.cli('--apply')
+        self.assertEqual(code, 2)
+        self.assertFalse(result['ok'])
+        self.assertFalse((self.project/'bridge.json').exists())
+        code, result = self.cli('--adopt-existing', '--apply')
+        self.assertEqual(code, 0)
+        self.assertEqual((Path(result['backup'])/'bridge.py').read_text(), 'custom launcher')
+        code, result = self.cli('--apply')
+        self.assertEqual(code, 0)
+        self.assertTrue(result['unchanged'])
+        self.assertFalse((self.project/'.agent-bridge').exists())
+
+    def test_cli_valid_role_template_and_missing_input(self):
+        role = self.parent/'roles.json'
+        atomic_json(role, dict(developer=dict(adapter='codex', command=['codex']),
+                              reviewer=dict(adapter='claude', command=['claude', '--tools', 'Read']),
+                              checks=[[sys.executable, '-c', 'pass']]))
+        code, result = self.cli('--roles-template', str(role))
+        self.assertEqual(code, 0)
+        self.assertTrue(result['roles_configured'])
+        raw = json.loads(self.template.read_text())
+        raw['include'] = ['missing']
+        atomic_json(self.template, raw)
+        code, result = self.cli('--apply')
+        self.assertEqual(code, 1)
+        self.assertFalse(result['ok'])
+        self.assertFalse((self.project/'bridge.json').exists())
+
+    def test_cli_does_not_load_calling_directory_config(self):
+        env = dict(os.environ)
+        env['PYTHONPATH'] = str(Path(__file__).resolve().parents[1]/'src')
+        (self.parent/'bridge.json').write_text('invalid unrelated config')
+        result = subprocess.run([sys.executable, '-B', '-m', 'agent_bridge', 'connect',
+                                 '--project', str(self.project), '--config-template', str(self.template)],
+                                cwd=self.parent, env=env, capture_output=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(json.loads(result.stdout)['ok'])
+        self.assertFalse((self.parent/'.agent-bridge').exists())
+
 if __name__=='__main__':unittest.main(verbosity=2)

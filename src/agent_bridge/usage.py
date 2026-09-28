@@ -102,7 +102,7 @@ def report(store, days=None, endpoint=None, batch=None, group_by="endpoint"):
             usage = snapshot(adapter, event)
         elapsed = number(row["finished"]-row["started"]) if row["finished"] is not None else None
         records.append(dict(usage, id=row["id"], endpoint=row["endpoint"], batch=row["batch"],
-                            state="RUNNING" if row["state"] in ("PLAN_RUNNING", "ROLE_RUNNING") else row["state"], day=datetime.fromtimestamp(row["started"],timezone.utc).date().isoformat(),
+                            state="RUNNING" if row["state"] in ("PLAN_RUNNING", "ROLE_RUNNING", "SUMMARY_RUNNING") else row["state"], day=datetime.fromtimestamp(row["started"],timezone.utc).date().isoformat(),
                             elapsed_seconds=elapsed))
     groups = {}
     field = "reported_model" if group_by == "model" else group_by

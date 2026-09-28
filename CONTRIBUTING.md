@@ -29,6 +29,6 @@ python -m pip install build
 python -m build
 ```
 
-The source distribution must include the project connection helpers, their launcher template, and both skill directories. The wheel contains the runtime and the agent-bridge skill.
+The source distribution must include the project connection helpers, their launcher template, and both skill directories. The wheel contains the runtime, the agent-bridge skill, and the explicit connection asset list bundled by setup.py. Maintain helpers and peer-consult files in tools/ and skills/; do not maintain a second generated copy in src/.
 
 Maintainers importing reviewed patches from a separate checkout should follow [the update workflow](docs/MAINTAINER_UPDATES.md). This repository remains independently buildable; private development records are not required.

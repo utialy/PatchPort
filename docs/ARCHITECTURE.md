@@ -10,6 +10,8 @@
 | child.py | Process ownership and cleanup: Windows Job Objects and POSIX process groups |
 | workspace.py | Selected input copies, change hashes, promotion, backup journals, and recovery |
 | context.py | Input inventories, budgets, required files, and frozen full/omit plans |
+| summaries.py | Reviewed reference summaries, provenance validation, and exact prompt rendering |
+| connect.py / role_policy.py | Local integration installation and shared reviewer policy validation |
 | usage.py | Provider-reported usage snapshots and aggregation |
 | answers.py | Durable answer bodies and brief result views |
 | cleanup.py | Retention and recovery checks before explicit artifact removal |
@@ -30,6 +32,10 @@ Promotion checks original and proposed hashes and the writable policy. Each file
 The queue's cumulative claim count includes failures after claim. Pause stops new claims, not running tasks. Restarting a runner marks leftover running work interrupted without replaying it.
 
 ## Project helpers
+
+The connect command dispatches before configuration/queue initialization. Its default is a read-only preview; explicit application preserves conflicts and backups. setup.py bundles only the reviewed helper, template, and peer-consult files inside the package. Installed code reads those assets without finding another checkout. The source checkout uses its fixed source layout. The legacy connector delegates to the same module.
+
+Summary plans use schema=2 and SUMMARY_QUEUED/SUMMARY_RUNNING states so older runners cannot claim or recover them. The new Store normalizes these for callers. Summary bodies and provenance are saved in the submission transaction. Execution rechecks source, metadata, configuration, and copied full files before launching a provider. Prompt files preserve the UTF-8 bytes counted by the budget. Role helpers retain full/omit plans; they do not submit summary plans. See [summary inputs](CONTEXT_SUMMARIES.md).
 
 The tools/ helpers connect another project to the installed runtime. role_flow runs development, host tests, and independent review in order. New roles share the parent queue and its pause/call cap. Historical private queues remain readable and are not migrated automatically.
 
