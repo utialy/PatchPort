@@ -44,7 +44,15 @@ agent-bridge --help
 
 ## Connect Codex and Claude Code
 
-Current source builds include the project connector and peer-consult assets in the wheel. With your project configuration ready, preview and then apply the connection:
+Current source builds include a setup wizard and peer-consult assets in the wheel. To connect without editing JSON, run:
+
+```sh
+agent-bridge setup
+```
+
+Choose the project, installed CLIs, and files to share, then review the changes before confirming. Empty projects can start with a small starter file. Existing configuration and project rules are preserved. See the [setup guide](docs/SETUP.md) for non-interactive previews and executable selection.
+
+With a reviewed configuration already prepared, the existing connector remains available:
 
 ```sh
 agent-bridge connect --project /path/to/project

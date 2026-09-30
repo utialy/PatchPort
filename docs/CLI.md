@@ -2,6 +2,10 @@
 
 Place `--config PATH` before the subcommand. Configuration paths are relative to the configuration file's project root. Input and writable entries use relative POSIX paths; a whole-project `.` entry is rejected.
 
+## Project setup
+
+`agent-bridge setup` guides project, CLI, and input selection without editing JSON. `setup --non-interactive --project PATH` previews an existing configuration; add --apply to install it. New configurations also require explicit provider and input or starter selections. See [setup](SETUP.md). Setup and connect use --project, not an alternative global --config, and never start a runner or make a provider request.
+
 ## Submission and results
 
 ```sh

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add `agent-bridge setup` for interactive project and CLI selection, starter files, and JSON previews without manually editing configuration.
+- Preserve existing settings, recheck selected inputs before application, and report partial installation failures with backup evidence. Keep identical pre-existing user files outside new managed ownership.
+
 - Add `agent-bridge connect` with wheel-bundled installation assets, preview by default, conflict checks, and explicit backup/replacement. Keep the standalone connector compatible.
 - Add reviewed summary plans with frozen source/body/record hashes, explicit metadata inputs, and reference-only prompt rendering. Preserve full required rules and writable files.
 - Keep summary tasks inaccessible to older runners through separate persisted queue states.

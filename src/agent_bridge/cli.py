@@ -25,6 +25,9 @@ def main(argv=None):
     from .connect import add_arguments, execute as connect_project
     connection = sub.add_parser("connect", help="Preview or install local project integration; no login or AI calls")
     add_arguments(connection)
+    from .setup_project import add_arguments as setup_arguments, execute as setup_project
+    setup = sub.add_parser("setup", help="Choose and connect a project without editing JSON; no login or AI calls")
+    setup_arguments(setup)
     submit = sub.add_parser("submit")
     submit.add_argument("--id", required=True)
     submit.add_argument("--targets", nargs="+", required=True)
@@ -59,6 +62,10 @@ def main(argv=None):
     recover = sub.add_parser("recover"); recover.add_argument("--task",required=True); recover.add_argument("--backup",required=True); recover.add_argument("--apply",action="store_true")
     args = parser.parse_args(argv)
     try:
+        if args.action == "setup":
+            if args.config != "bridge.json":
+                raise ValueError("setup uses --project, not --config")
+            return setup_project(args)
         if args.action == "connect":
             if args.config != "bridge.json":
                 raise ValueError("connect uses --project and --config-template, not --config")

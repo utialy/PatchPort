@@ -5,8 +5,8 @@
 Current source builds provide `agent-bridge connect` and bundle its installation assets in the wheel. The published 0.1.0a2 wheel predates this command; install the current source version before using it.
 
 1. Install PatchPort as described in the [README](../README.md#install), and install and authenticate the provider CLIs you want to use.
-2. In the project you want to work on, run `agent-bridge init`. Edit `bridge.json` to select existing input files, writable paths, and the Claude/Codex endpoint commands. Run `agent-bridge doctor` to check command resolution; it does not verify authentication. On Windows, follow the executable guidance in the README.
-3. With the installed environment active, preview `agent-bridge connect --project /path/to/project`. Inspect the proposed actions, then repeat with `--apply`. Replace the example path with your project directory. A current wheel installation does not require the source checkout at runtime.
+2. Run `agent-bridge setup --project /path/to/project` to select CLIs and input files, then confirm the preview. The [wizard](SETUP.md) creates the configuration and connection files without starting a runner. It preserves an existing bridge.json. Authentication is not tested.
+3. If you already prepared a reviewed configuration, you can instead preview `agent-bridge connect --project /path/to/project` and repeat with --apply. A current wheel installation does not require the source checkout at runtime. The existing init/doctor commands remain available for manual configuration.
 4. In the connected project, start `python bridge.py run` in a separate terminal and leave it running. Use only one runner for this project's state. `python bridge.py status` should report a fresh runner and dispatch ready.
 5. Open Codex or Claude Code in that project and explicitly ask it to consult the configured peer. The connector installs `peer-consult` under both `.agents/skills` and `.claude/skills`. If discovery misses it, invoke the skill explicitly.
 

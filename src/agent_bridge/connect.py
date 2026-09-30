@@ -42,27 +42,58 @@ def config_input(project, relative, template):
     return (json.dumps(value, ensure_ascii=False, indent=2) + '\n').encode(), True
 
 
-def plan_install(project, python=None, config_template=None, roles_template=None, adopt=False):
+def project_path(project):
+    """Reject a linked project; freeze parent aliases to their canonical path."""
+    path = Path(os.path.abspath(Path(project).expanduser()))
+    if path.is_symlink() or (hasattr(path, 'is_junction') and path.is_junction()):
+        raise ValueError('Project links/junctions are not supported')
+    return path.resolve()
+
+
+def plan_install(project, python=None, config_template=None, roles_template=None, adopt=False,
+                 *, config_data=None, initial_files=None, create_project=False):
     ROOT = asset_root()
-    project = Path(project).resolve()
-    if not project.is_dir(): raise ValueError('Create the intended project directory first')
+    project = project_path(project)
+    project_exists = project.is_dir()
+    if not project_exists and (not create_project or project.exists() or not project.parent.is_dir()):
+        raise ValueError('Select an existing project, or explicitly create one under an existing parent')
     if (project.parent/'baseline.json').exists() or '.role-flows' in project.parts:
         raise ValueError('Do not install integrations in delegated task copies')
+    guards = {name: workspace.digest(workspace.safe(project, name))
+              for name in ('bridge.json', 'role_workflow.json', MANIFEST)}
     python = Path(python or sys.executable).resolve()
     if not python.is_file(): raise ValueError('Python executable not found')
-    config_bytes, create_config = config_input(project, 'bridge.json', config_template)
+    initial_files = dict(initial_files or {})
+    for name, data in initial_files.items():
+        if not isinstance(data, bytes) or workspace.safe(project, name).exists():
+            raise ValueError('Initial files must be new files with byte contents')
+    if config_data is not None:
+        if workspace.safe(project, 'bridge.json').exists() or config_template is not None:
+            raise ValueError('Generated config cannot replace an existing config or template')
+        config_bytes = (json.dumps(config_data, ensure_ascii=False, indent=2) + '\n').encode()
+        create_config = True
+    else:
+        config_bytes, create_config = config_input(project, 'bridge.json', config_template)
     raw = json.loads(config_bytes.decode('utf-8-sig'))
     # Validate with the real project root, without creating queue/state in that project.
     with tempfile.TemporaryDirectory() as temp:
         path = Path(temp)/'bridge.json'
-        check = dict(raw, project=str((project/raw.get('project','.')).resolve()))
+        intended_root = (project/raw.get('project','.')).resolve()
+        if intended_root != project: raise ValueError('bridge.json must refer to the selected project root')
+        validation_root = project if project_exists else Path(temp)
+        if not project_exists:
+            for name, data in initial_files.items():
+                target = workspace.safe(validation_root, name)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(data)
+        check = dict(raw, project=str(validation_root))
         path.write_text(json.dumps(check),encoding='utf-8')
         config = load_config(path)
-        if config['root'] != project: raise ValueError('bridge.json must refer to the selected project root')
         if project.is_relative_to(config['state']/'workspaces') or '.role-flows' in project.parts:
             raise ValueError('Do not install integrations in delegated task copies')
         inventory = context.preview(config)
-        if inventory['missing']: raise ValueError('Config contains missing include paths')
+        if any(name not in initial_files for name in inventory['missing']):
+            raise ValueError('Config contains missing include paths')
     contents = {}
     if create_config: contents['bridge.json'] = config_bytes
     role_path = workspace.safe(project, 'role_workflow.json')
@@ -99,13 +130,16 @@ def plan_install(project, python=None, config_template=None, roles_template=None
     request_path=workspace.safe(project,'tasks/request.md')
     if not request_path.exists():
         contents['tasks/request.md']=b'Review the selected project files without editing them. Report findings and limitations.\n'
+    if initial_files.keys() & contents.keys():
+        raise ValueError('Initial files overlap integration assets')
+    contents.update(initial_files)
     previous={}
     manifest_path=workspace.safe(project,MANIFEST)
     if manifest_path.exists():
         previous=json.loads(manifest_path.read_text(encoding='utf-8'))
         if previous.get('schema')!=1 or not isinstance(previous.get('files'),dict):
             raise ValueError('Invalid integration manifest; inspect before updating')
-    managed={name for name in contents if name not in ('bridge.json','role_workflow.json','tasks/request.md')}
+    managed={name for name in contents if name not in ('bridge.json','role_workflow.json','tasks/request.md') and name not in initial_files}
     actions=[]
     for name,data in contents.items():
         target=workspace.safe(project,name)
@@ -113,19 +147,39 @@ def plan_install(project, python=None, config_template=None, roles_template=None
         state='create' if old is None else 'keep' if old==data else 'update'
         if state=='update' and previous.get('files',{}).get(name)!=digest(old) and not adopt:
             state='conflict'
+        if state == 'keep' and name in managed and previous.get('files', {}).get(name) != digest(old):
+            managed.remove(name)
         actions.append(dict(path=name,action=state,before=digest(old) if old is not None else None,after=digest(data)))
+    if any(workspace.digest(workspace.safe(project, name)) != expected for name, expected in guards.items()):
+        raise ValueError('Configuration or manifest changed while planning')
     return dict(project=project,python=python,contents=contents,managed=managed,actions=actions,
+                guards=guards, project_exists=project_exists,
                 roles=role_path.exists() or roles_template is not None,
                 ok=not any(a['action']=='conflict' for a in actions))
 
 
-def install(plan, apply=False):
+class InstallError(ValueError):
+    """Expose partial installation evidence without retrying or deleting files."""
+    def __init__(self, report, cause):
+        self.report = dict(report, ok=False, connection='PARTIAL', error=str(cause))
+        super().__init__('Installation may be partial; inspect backup ' + str(report.get('backup', '')))
+
+
+def install(plan, apply=False, *, before_write=None):
     report=dict(project=str(plan['project']),python=str(plan['python']),apply=apply,ok=plan['ok'],roles_configured=plan['roles'],actions=plan['actions'],runner_started=False,ai_calls=0)
     if not apply or not plan['ok']: return report
     env=dict(os.environ);env.pop('PYTHONPATH',None)
     checked=subprocess.run([str(plan['python']),'-c','import agent_bridge; from agent_bridge.storage import probe_lock, readonly_database, durable_write, sync_directory; from agent_bridge.role_policy import readonly; print(agent_bridge.__version__)'],env=env,capture_output=True,timeout=15)
     if checked.returncode:raise ValueError('Selected Python needs the current agent_bridge runtime with connection and role policy support; install the updated package first')
+    if before_write is not None: before_write()
     project=plan['project']
+    if project_path(project) != project:
+        raise ValueError('Project location changed after preview')
+    if project.is_dir() != plan.get('project_exists', True):
+        raise ValueError('Project changed after preview')
+    for name, expected in plan.get('guards', {}).items():
+        if workspace.digest(workspace.safe(project, name)) != expected:
+            raise ValueError('Configuration or manifest changed after preview: ' + name)
     # Recheck all intended destinations before the first project write.
     for item in plan['actions']:
         target=workspace.safe(project,item['path'])
@@ -137,15 +191,17 @@ def install(plan, apply=False):
         report['unchanged']=True
         return report
     backup=workspace.safe(project,'.bridge-integration-backups/'+uuid.uuid4().hex)
-    backup.mkdir(parents=True)
-    manifest=workspace.safe(project,MANIFEST)
-    if manifest.exists():shutil.copy2(manifest,backup/'previous-manifest.json')
-    for item in plan['actions']:
-        if item['action']=='update':
-            saved=workspace.safe(backup,item['path']);saved.parent.mkdir(parents=True,exist_ok=True)
-            shutil.copy2(workspace.safe(project,item['path']),saved)
-    atomic_json(backup/'plan.json',report)
+    report['backup']=str(backup)
     try:
+        if not plan.get('project_exists', True): project.mkdir()
+        backup.mkdir(parents=True)
+        manifest=workspace.safe(project,MANIFEST)
+        if manifest.exists():shutil.copy2(manifest,backup/'previous-manifest.json')
+        for item in plan['actions']:
+            if item['action']=='update':
+                saved=workspace.safe(backup,item['path']);saved.parent.mkdir(parents=True,exist_ok=True)
+                shutil.copy2(workspace.safe(project,item['path']),saved)
+        atomic_json(backup/'plan.json',report)
         for item in plan['actions']:
             if item['action']=='keep':continue
             target=workspace.safe(project,item['path'])
@@ -154,9 +210,11 @@ def install(plan, apply=False):
             temporary.write_bytes(plan['contents'][item['path']])
             os.replace(temporary,target)
         atomic_json(manifest,desired_manifest)
-    except Exception as exc:
-        atomic_json(backup/'error.json',dict(error=str(exc),note='Installation may be partial; inspect backup before retry'))
-        raise
+    except (Exception, KeyboardInterrupt) as exc:
+        if backup.is_dir():
+            try: atomic_json(backup/'error.json',dict(error=str(exc),note='Installation may be partial; inspect backup before retry'))
+            except OSError: pass
+        raise InstallError(report, exc) from exc
     report['backup']=str(backup)
     return report
 

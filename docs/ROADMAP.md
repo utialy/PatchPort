@@ -1,5 +1,9 @@
 # Remaining work
 
+## Project onboarding
+
+The setup wizard supports local project selection, CLI discovery, input review, and explicit connection installation. Next work includes runner lifecycle management, an installation/management interface, and first-use validation with separately authorized real provider calls. See [setup](SETUP.md) and [validation](VALIDATION.md).
+
 ## Flow cleanup
 
 Archive readers, flow-lifetime locks, read-only planning, archive-only writing, and explicit continuation exist in 0.1.0a2. Whole-flow deletion, archive expiry, and interrupted deletion remain future work. Preserve private queue history and recovery data throughout. The first alpha release does not depend on these deletion features.

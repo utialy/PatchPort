@@ -1,5 +1,13 @@
 # Validation
 
+## Current source changes: guided project setup
+
+On 2026-09-30, a wheel built from the public checkout was installed into an isolated Windows environment. Python 3.14.6 ran 269 tests: 266 passed and three permission-dependent symlink tests were skipped (83.947 seconds). Public release policy and local documentation link checks passed. Tests cover CLI discovery without execution, input/configuration changes after preview, ownership preservation, cancellation, partial writes, and canonical project paths.
+
+Both the module and native console entry points connected temporary new and existing projects outside the checkout. Previews left target files unchanged, application created local connection files, and repeat application was unchanged. No queue or runner was created, and no real provider was called. Imported runtime files came from site-packages and matched the reviewed public source.
+
+Linux and macOS were not rerun locally for this update. Parent-alias handling has a simulated regression check; it is not a direct macOS measurement. Remote CI results must be checked separately. The published 0.1.0a2 release assets remain unchanged; use a current source build for setup.
+
 ## Current source changes: connection CLI and reviewed summaries
 
 On 2026-09-28, a wheel built from the updated public source was installed into a fresh Windows environment. Python 3.14.6 ran 245 tests: 243 passed and two permission-dependent symlink tests were skipped (88.262 seconds). The public policy checks passed. The native console preview and module-based connection installation also passed from a temporary project outside the checkout, without creating a queue or calling a provider.

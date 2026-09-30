@@ -12,6 +12,7 @@
 | context.py | Input inventories, budgets, required files, and frozen full/omit plans |
 | summaries.py | Reviewed reference summaries, provenance validation, and exact prompt rendering |
 | connect.py / role_policy.py | Local integration installation and shared reviewer policy validation |
+| setup_project.py | CLI discovery, explicit input selection, setup previews, and interactive confirmation |
 | usage.py | Provider-reported usage snapshots and aggregation |
 | answers.py | Durable answer bodies and brief result views |
 | cleanup.py | Retention and recovery checks before explicit artifact removal |
@@ -32,6 +33,8 @@ Promotion checks original and proposed hashes and the writable policy. Each file
 The queue's cumulative claim count includes failures after claim. Pause stops new claims, not running tasks. Restarting a runner marks leftover running work interrupted without replaying it.
 
 ## Project helpers
+
+Setup dispatches before queue initialization and builds on the connector's installation plan. Generated configuration and starter files remain in memory until explicit application. Missing project roots use a temporary validation root. Setup checks selected input paths and hashes, then rechecks inputs and CLI resolution after the runtime import probe. The connector also guards configuration and manifest hashes and preserves ownership of identical pre-existing user files. Partial writes report backup evidence without automatic retry or deletion. Authentication and provider invocation are not part of setup.
 
 The connect command dispatches before configuration/queue initialization. Its default is a read-only preview; explicit application preserves conflicts and backups. setup.py bundles only the reviewed helper, template, and peer-consult files inside the package. Installed code reads those assets without finding another checkout. The source checkout uses its fixed source layout. The legacy connector delegates to the same module.
 
