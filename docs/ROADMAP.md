@@ -1,5 +1,17 @@
 # Remaining work
 
+## Current source: VS Code 0.3.0
+
+The local Windows extension now provides terminal routing, core/job/usage binding,
+durable interactive history, input/summary submission, selected-copy review/
+promotion/recovery, role/test/archive management and explicit session recovery/
+runtime checks. See the [walkthrough](VSCODE_GUIDE.md).
+
+Next extension work includes external-process handoff, remote/other-OS validation
+and additional adapters. Charge enforcement, whole-flow deletion and the separate
+desktop candidate's remaining native/UI/distribution checks are independent work.
+Older milestone notes below describe their original release context.
+
 ## Project onboarding
 
 The setup wizard supports local project selection, CLI discovery, input review, and explicit connection installation. Next work includes runner lifecycle management, an installation/management interface, and first-use validation with separately authorized real provider calls. See [setup](SETUP.md) and [validation](VALIDATION.md).

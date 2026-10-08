@@ -1,0 +1,10 @@
+.core-modal{width:min(1160px,96vw)}.core-columns{display:grid;grid-template-columns:1fr 1fr;gap:24px}.core-columns>section{min-width:0}.core-controls{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}.core-controls select,.core-controls input{max-width:300px;padding:8px;background:#111c24;color:#d8e5ed;border:1px solid #3a4b58;border-radius:4px}.usage-table{border-collapse:collapse;width:100%;font-size:11px;margin:12px 0}.usage-table th,.usage-table td{padding:7px;border-bottom:1px solid #34434d;text-align:left}.task-select{display:block;width:100%;text-align:left;margin:5px 0}.core-modal details{padding:9px 0;border-bottom:1px solid #34434d}.core-modal pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px;max-height:400px;overflow:auto}.core-modal h3{font-size:16px;margin-top:20px}.core-error{color:#ffb7aa}.core-modal .muted{white-space:pre-wrap}.core-result{border:1px solid #567765;padding:12px!important}.budget-note{color:#a7bbc9}@media(max-width:800px){.core-columns{grid-template-columns:1fr}}
+.workflow-form textarea { min-height: 110px; resize: vertical; }
+.workflow-form .field { display: grid; gap: 6px; margin: 12px 0; }
+.workflow-form input, .workflow-form select, .workflow-form textarea { max-width: 100%; }
+.workflow-form select, .workflow-form input:not([type="checkbox"]), .workflow-form textarea { background: #131b23; color: var(--text); border: 1px solid var(--line); border-radius: 5px; padding: 8px; }
+.workflow-form .usage-table input { width: 130px; margin-left: 6px; }
+.workflow-diff pre { border: 1px solid var(--line); border-radius: 6px; padding: 14px; background: #11171d; font-size: 13px; }
+.workflow-changes label { display: flex; gap: 10px; align-items: center; margin: 9px 0; }
+.workflow-form button { margin: 4px; }
+.workflow-diff pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow: auto; }

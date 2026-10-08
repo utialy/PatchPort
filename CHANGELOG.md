@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Add the local Windows x64 VS Code 0.3.0 terminal board, launch profiles,
+  directed AI routes and bounded collaboration groups.
+- Bind existing configuration/jobs/results/usage; persist interactive history,
+  delivery and supported consumption signals separately from batch claims.
+- Add one-use input/summary/submission plans, copy inspection, selected promotion/
+  recovery, unsaved-editor protection and durable role/test/archive workflows.
+- Restore paused boards, rounds/counts and history; explicitly resume recorded
+  provider UUIDs and verify bundled runtime integrity before updates.
+- Document source installation and project workflows with seven controlled mock
+  screenshots. Preserve desktop/POSIX/service sources as experimental components.
+
 - Add `agent-bridge setup` for interactive project and CLI selection, starter files, and JSON previews without manually editing configuration.
 - Preserve existing settings, recheck selected inputs before application, and report partial installation failures with backup evidence. Keep identical pre-existing user files outside new managed ownership.
 
@@ -10,7 +21,10 @@
 - Keep summary tasks inaccessible to older runners through separate persisted queue states.
 - Preserve exact UTF-8 prompt bytes on Windows so delivered input matches the budget.
 
-These changes are available in source builds; the published 0.1.0a2 release assets are unchanged. No automatic summary generation, provider retries, session resumption, token/cost enforcement, or whole-flow deletion is added.
+These changes are available in source builds; the published 0.1.0a2 release assets
+are unchanged. Recorded provider sessions can be resumed explicitly. Automatic
+summary generation, provider retries, token/cost enforcement and whole-flow
+deletion are not added.
 
 ## 0.1.0a2
 

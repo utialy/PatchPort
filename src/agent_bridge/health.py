@@ -7,7 +7,7 @@ import re
 import time
 
 from . import __version__
-from .storage import FileLock
+from .storage import FileLock, probe_lock
 
 STALE_AFTER_SECONDS = 10
 
@@ -40,13 +40,16 @@ def _number(value):
         return False
 
 
-def inspect(state, now=None):
+def inspect(state, now=None, *, readonly=False):
     state = Path(state)
-    try:
-        with FileLock(state / "runner.lock"):
-            held = False
-    except RuntimeError:
-        held = True
+    if readonly:
+        held = probe_lock(state / 'runner.lock') == 'LOCKED'
+    else:
+        try:
+            with FileLock(state / "runner.lock"):
+                held = False
+        except RuntimeError:
+            held = True
     current = code_identity()
     result = {"runner": "LOCKED" if held else "STOPPED", "lock_held": held,
               "health": "UNKNOWN", "heartbeat_status": "UNKNOWN",

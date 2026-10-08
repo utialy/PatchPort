@@ -1,4 +1,4 @@
-"""Bounded multi-endpoint execution. No shell interpolation or automatic retries."""
+"""Bounded execution with direct argv or explicitly selected profile shells."""
 from concurrent.futures import ThreadPoolExecutor
 from collections import Counter
 import json
@@ -16,17 +16,19 @@ from .usage import snapshot
 from . import context
 from .health import code_identity
 from .answers import capture
+from .child import profile_argv
 
 PRINT_LOCK = threading.Lock()
 
-def argv_for(endpoint, reply):
+def argv_for(endpoint, reply, *, cwd=None):
     argv = list(endpoint["command"])
-    executable = shutil.which(argv[0])
-    if not executable: raise ValueError("CLI executable not found: " + argv[0])
-    if os.name == "nt" and Path(executable).suffix.lower() in {".cmd", ".bat", ".ps1"}:
-        raise ValueError("Use a native .exe or [node, absolute/path/to/cli.js] on Windows; shell shims are not executed")
-    # The worker changes cwd to its copy: never retain a relative executable path.
-    argv[0] = str(Path(executable).resolve())
+    if endpoint.get('launch') is None:
+        executable = shutil.which(argv[0])
+        if not executable: raise ValueError("CLI executable not found: " + argv[0])
+        if os.name == "nt" and Path(executable).suffix.lower() in {".cmd", ".bat", ".ps1"}:
+            raise ValueError("Use a native .exe or [node, absolute/path/to/cli.js] on Windows; shell shims are not executed")
+        # The worker changes cwd to its copy: never retain a relative executable path.
+        argv[0] = str(Path(executable).resolve())
     adapter = endpoint["adapter"]
     if adapter == "claude":
         argv += ["-p", "--output-format", "stream-json", "--verbose"]
@@ -36,7 +38,7 @@ def argv_for(endpoint, reply):
         # Codex options must precede the stdin prompt marker.
         if adapter == "codex": argv[-1:-1] = ["--model", endpoint["model"]]
         else: argv += ["--model", endpoint["model"]]
-    return argv
+    return profile_argv(argv, endpoint['launch'], cwd=cwd) if endpoint.get('launch') is not None else argv
 
 def execute(config, row, stop_event, store=None):
     store = store if store is not None else Store(config["state"])
@@ -74,7 +76,7 @@ def execute(config, row, stop_event, store=None):
         # Preserve the bytes counted by the input budget on every platform.
         prompt_file.write_bytes(prompt.encode("utf-8"))
         reply = home / "provider-reply.txt"
-        spec = dict(argv=argv_for(endpoint, reply), cwd=str(home / "project"), prompt_file=str(prompt_file), exit_file=str(home / "exit-code.txt"))
+        spec = dict(argv=argv_for(endpoint, reply, cwd=home / 'project'), cwd=str(home / "project"), prompt_file=str(prompt_file), exit_file=str(home / "exit-code.txt"))
         atomic_json(home / "process.json", spec)
         env = dict(os.environ)
         # Bootstrap remains importable after cwd changes, including from an uninstalled checkout.
@@ -170,15 +172,41 @@ def role_config(parent, row, store):
     return selected
 
 
-def run(config, once=False, *, task_ids=None):
+def run(config, once=False, *, task_ids=None, expected=None, backend='manual', service_id=None):
     configure_output()
-    store = Store(config["state"])
     stop = threading.Event()
-    with FileLock(config["state"] / "runner.lock"):
+    from .child import drain_on_termination
+    with FileLock(config["state"] / "runner.lock"), drain_on_termination() as terminating:
+        from .service_manager import guard_execution
+        guard_execution(config, backend, service_id, running=True)
+        store = Store(config["state"])
         # Capture once: later source edits must not refresh the running identity.
         identity = code_identity()
         started = time.time()
+        from .runner_manager import execution_identity
+        import uuid
+        details = execution_identity(config)
+        if expected is not None and details != expected['identity']:
+            raise ValueError('Runner configuration changed before startup')
+        run_id = expected['run_id'] if expected else uuid.uuid4().hex
+        launch_digest = None
+        launch_path = config['state'] / 'runner-launch.json'
+        if launch_path.exists():
+            import hashlib
+            launch_bytes = launch_path.read_bytes()
+            launch = json.loads(launch_bytes)
+            launch_digest = hashlib.sha256(launch_bytes).hexdigest()
+            previous = store.lifecycle() or {}
+            if (not isinstance(launch, dict) or not isinstance(launch.get('run_id'), str) or not launch['run_id']
+                    or launch.get('outcome') not in ('PENDING', 'FAILED') or (launch.get('outcome') != 'FAILED'
+                    and launch.get('run_id') != run_id and launch.get('run_id') != previous.get('run_id')
+                    and previous.get('confirmed_launch_sha256') != launch_digest)):
+                raise ValueError('Previous launch is unconfirmed; inspect before running')
+        record = dict(protocol=1, run_id=run_id, identity=details, started=started,
+                      mode='RUNNING', acknowledged=None, ended=None, backend=backend, service_id=service_id,
+                      confirmed_launch_sha256=launch_digest)
         store.recover()
+        store.register_runner(record)
         with ThreadPoolExecutor(max_workers=config.get("parallel",2)) as pool:
             active = {}
             last_beat = 0
@@ -186,8 +214,15 @@ def run(config, once=False, *, task_ids=None):
                 while True:
                     for future in list(active):
                         if future.done(): future.result(); del active[future]
+                    if terminating():
+                        store.runner_transition(run_id, mode='DRAINING', reason='SIGTERM requested drain')
+                    record = store.runner_transition(run_id, acknowledge=True)
+                    draining = record['mode'] != 'RUNNING'
+                    if record['mode'] == 'CANCELLING': stop.set()
+                    if draining and not active: return 0
                     counts = Counter(active.values())
-                    for row in store.rows():
+                    for row in ([] if draining else store.rows()):
+                        if terminating(): break
                         if row["state"] != "QUEUED": continue
                         if task_ids is not None and row['id'] not in task_ids: continue
                         if len(active) >= config.get("parallel",2): break
@@ -197,17 +232,17 @@ def run(config, once=False, *, task_ids=None):
                             try:
                                 selected = role_config(config, row, store)
                             except Exception as exc:
-                                if store.claim(row['id']):
+                                if store.claim(row['id'], run_id):
                                     store.finish(row['id'], 'ERROR', dict(error='Invalid role metadata: ' + str(exc)))
                                 continue
                         if ep not in selected["endpoints"]:
                             store.finish(row["id"],"ERROR",{"error":"Endpoint removed from config"}); continue
                         if counts[ep] >= selected["endpoints"][ep].get("parallel",1): continue
-                        if store.claim(row["id"]):
+                        if store.claim(row["id"], run_id):
                             active[pool.submit(execute,selected,row,stop,store)] = ep; counts[ep] += 1
                     if time.monotonic()-last_beat > 2:
                         last_beat=time.monotonic()
-                        try: atomic_json(config["state"] / "health.json", dict(schema=1, pid=os.getpid(), started=started, code=identity, heartbeat=time.time(),active=len(active)))
+                        try: atomic_json(config["state"] / "health.json", dict(schema=1, pid=os.getpid(), started=started, code=identity, heartbeat=time.time(),active=len(active), management=record))
                         except OSError: pass  # Monitoring must not abort provider work.
                     if once and not active:
                         if not any(r["state"] == "QUEUED" and (task_ids is None or r['id'] in task_ids) for r in store.rows()): return 0
@@ -216,3 +251,9 @@ def run(config, once=False, *, task_ids=None):
             except KeyboardInterrupt:
                 stop.set()
                 for future in active: future.result()
+            finally:
+                # Keep ownership until all already-claimed work has finished.
+                for future in active:
+                    try: future.result()
+                    except Exception: pass
+                store.runner_transition(run_id, mode='STOPPED', reason='Runner exited')

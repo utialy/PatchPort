@@ -3,12 +3,34 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import struct
+import zlib
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 import check_public_release as policy
 
 
 class ReleasePolicyTests(unittest.TestCase):
+    def png(self):
+        def chunk(kind, body):
+            return struct.pack('>I', len(body)) + kind + body + struct.pack('>I', zlib.crc32(kind + body) & 0xffffffff)
+        return b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', 1, 1, 8, 2, 0, 0, 0)) + chunk(b'IDAT', zlib.compress(b'\x00\x00\x00\x00')) + chunk(b'IEND', b'')
+
+    def test_only_reviewed_screenshot_paths_accept_valid_png(self):
+        data = self.png()
+        self.assertEqual(policy.check_content('docs/images/board.png', data), [])
+        self.assertTrue(policy.check_content('examples/board.png', data))
+        self.assertTrue(policy.check_content('docs/images/board.png', b'not a PNG'))
+        self.assertTrue(policy.check_content('docs/images/board.png', data[:-1]))
+        self.assertTrue(policy.check_content('docs/images/board.png', data + b'unreviewed'))
+
+    def test_extension_layout_keeps_generated_and_private_files_excluded(self):
+        self.assertEqual(policy.check_content('extensions/vscode/src/example.ts', b'export const value = 1;\n'), [])
+        self.assertEqual(policy.check_content('extensions/vscode/.vscodeignore', b'dist/test/**\n'), [])
+        self.assertTrue(policy.check_content('extensions/vscode/core/agent_bridge/x.py', b'value = 1\n'))
+        self.assertTrue(policy.check_content('extensions/vscode/runtime-manifest.json', b'{}'))
+        self.assertTrue(policy.check_content('extensions/vscode/dist/bundle.js', b'value = 1;'))
+
     def test_valid_commit_message(self):
         self.assertEqual(policy.check_message('fix(archive): reject corrupt blobs\n\nValidate the digest before reading evidence.\n'), [])
 

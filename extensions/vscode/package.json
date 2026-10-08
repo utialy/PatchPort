@@ -1,0 +1,187 @@
+{
+  "name": "patchport",
+  "displayName": "PatchPort - AI Terminal Bridge",
+  "description": "Control real AI terminals and connect Claude Code and Codex inside your VS Code workspace.",
+  "version": "0.3.0",
+  "publisher": "utialy",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "AI",
+    "terminal",
+    "claude",
+    "codex",
+    "agents"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/utialy/PatchPort"
+  },
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onCommand:patchport.openBoard",
+    "onView:patchport.sessions"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "The board can be viewed, but terminals and profiles require a trusted workspace."
+    },
+    "virtualWorkspaces": false
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "patchport.openBoard",
+        "title": "PatchPort: Open AI Terminal Board",
+        "icon": "$(layout)"
+      },
+      {
+        "command": "patchport.addTerminal",
+        "title": "PatchPort: Add AI Terminal",
+        "icon": "$(add)"
+      },
+      {
+        "command": "patchport.manageProfiles",
+        "title": "PatchPort: Configure Launch Profiles"
+      },
+      {
+        "command": "patchport.connectExisting",
+        "title": "PatchPort: Show Existing VS Code Terminals"
+      },
+      {
+        "command": "patchport.stopAll",
+        "title": "PatchPort: Stop All Managed Terminals"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "patchport",
+          "title": "PatchPort",
+          "icon": "media/bridge.svg"
+        }
+      ]
+    },
+    "views": {
+      "patchport": [
+        {
+          "id": "patchport.sessions",
+          "name": "AI Terminals"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "patchport.openBoard",
+          "when": "view == patchport.sessions",
+          "group": "navigation"
+        },
+        {
+          "command": "patchport.addTerminal",
+          "when": "view == patchport.sessions",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "PatchPort",
+      "properties": {
+        "patchport.corePython": {
+          "type": "string",
+          "default": "python",
+          "scope": "machine",
+          "description": "Python 3.11+ executable for the bundled standard-library core. Use an absolute path to select a runtime. Reload the window after changing this setting."
+        },
+        "patchport.profiles": {
+          "type": "array",
+          "default": [],
+          "scope": "machine-overridable",
+          "description": "Named CLI launch profiles. Command and arguments are separate; choose a shell to use profile functions and aliases.",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "name",
+              "provider",
+              "command"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "provider": {
+                "enum": [
+                  "claude",
+                  "codex",
+                  "terminal"
+                ]
+              },
+              "command": {
+                "type": "string"
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "default": []
+              },
+              "shell": {
+                "enum": [
+                  "powershell",
+                  "pwsh",
+                  "bash",
+                  "zsh",
+                  "direct"
+                ],
+                "default": "powershell"
+              },
+              "shellPath": {
+                "type": "string"
+              },
+              "profilePath": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node scripts/build.cjs",
+    "check": "tsc --noEmit",
+    "test": "npm run build && node --test test/*.test.cjs",
+    "package": "npm run check && npm run build && node scripts/package.cjs"
+  },
+  "dependencies": {
+    "node-pty": "1.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/vscode": "^1.100.0",
+    "@vscode/test-electron": "^2.5.0",
+    "@vscode/vsce": "^4.0.0",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-serialize": "0.14.0",
+    "@xterm/headless": "6.0.0",
+    "@xterm/xterm": "^6.0.0",
+    "esbuild": "^0.25.0",
+    "playwright-core": "^1.55.0",
+    "typescript": "^5.9.0"
+  }
+}

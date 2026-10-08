@@ -1,5 +1,38 @@
 # Validation
 
+## Current source: VS Code and guarded project workflows
+
+On 2026-10-08 the independent public checkout was built and installed in a fresh
+Windows x64 environment. Python 3.14.6 ran 427 tests: 419 passed and eight
+platform/permission-specific checks were skipped. The suite includes nine public
+content-policy checks. Unicode fixtures retain their original values through
+source escapes; changed shared Python files were compared with the development
+source's parsed syntax. Read-only, queue/claim, runner, interactive ledger,
+input/provenance, promotion/recovery, role/test/cleanup/archive and service
+simulation checks passed. A polling fixture waits for the durable role-job
+completion receipt before reading its final result, avoiding Windows atomic-file
+replacement/read races.
+
+The English VS Code 0.3.0 extension passed type checking and 30 tests on Windows,
+including actual mock PTYs, profile functions, routed responses, recording failure
+protection, one-use core plans, first-queue ledger retention, Windows path casing,
+board snapshots and runtime integrity. Node.js 24.14.0 built a Windows x64 VSIX
+using VSCE 4.0.0. The locked dependency audit reported zero vulnerabilities after
+updating this build-only tool. An isolated VS Code 1.140.0 installation was checked
+for core access, unsaved-editor protection, selected promotion/recovery and its
+English bundled guide.
+
+Seven screenshots use the actual compiled English Webview rendered in Chrome
+with isolated mock task/role/ledger data and generic paths. They are examples,
+not live provider responses or account usage. Screenshot/link/content policy
+checks passed. No real AI provider was called for this public update.
+
+Other-OS/remote extension execution and current live provider formats/authentication
+were not measured by these Windows/mock checks. The additional Windows extension
+CI job is configured; hosted results must be inspected independently. Existing
+0.1.0a2 release assets are unchanged. The historical results below describe their
+original release/source revisions.
+
 ## Current source changes: guided project setup
 
 On 2026-09-30, a wheel built from the public checkout was installed into an isolated Windows environment. Python 3.14.6 ran 269 tests: 266 passed and three permission-dependent symlink tests were skipped (83.947 seconds). Public release policy and local documentation link checks passed. Tests cover CLI discovery without execution, input/configuration changes after preview, ownership preservation, cancellation, partial writes, and canonical project paths.

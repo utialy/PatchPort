@@ -9,9 +9,10 @@ import subprocess
 import sys
 import tempfile
 import uuid
+import contextlib
 
 from agent_bridge import context, workspace
-from agent_bridge.storage import load_config, atomic_json
+from agent_bridge.storage import load_config, atomic_json, FileLock
 
 def asset_root():
     """Use wheel assets or the explicit source checkout layout, never the cwd."""
@@ -165,11 +166,42 @@ class InstallError(ValueError):
         super().__init__('Installation may be partial; inspect backup ' + str(report.get('backup', '')))
 
 
+@contextlib.contextmanager
+def reconnect_guard(plan):
+    """Serialize integration upgrades against managed starts and running work."""
+    manifest = workspace.safe(plan['project'], MANIFEST)
+    if not manifest.exists():
+        yield
+        return
+    previous = json.loads(manifest.read_text(encoding='utf-8'))
+    if previous.get('python') == str(plan['python']) and all(a['action'] == 'keep' for a in plan['actions']):
+        yield
+        return
+    from . import runner_manager
+    config = runner_manager.checked_config(plan['project'] / 'bridge.json')
+    with FileLock(config['state'] / 'runner-management.lock'):
+        from .service_manager import registration
+        if registration(config):
+            raise ValueError('Stop, disable and unregister the service before reconnecting this project')
+        with FileLock(config['state'] / 'runner.lock'):
+            status = runner_manager.inspect(config)
+            if any(p in status['problems'] for p in ('LAUNCH_UNCONFIRMED', 'LAUNCH_UNKNOWN', 'DATABASE_UNKNOWN')):
+                raise ValueError('Runner launch or database is unknown; inspect before reconnecting')
+            yield
+
+
 def install(plan, apply=False, *, before_write=None):
+    if not apply or not plan['ok']:
+        return _install(plan, apply, before_write=before_write)
+    with reconnect_guard(plan):
+        return _install(plan, apply, before_write=before_write)
+
+
+def _install(plan, apply=False, *, before_write=None):
     report=dict(project=str(plan['project']),python=str(plan['python']),apply=apply,ok=plan['ok'],roles_configured=plan['roles'],actions=plan['actions'],runner_started=False,ai_calls=0)
     if not apply or not plan['ok']: return report
     env=dict(os.environ);env.pop('PYTHONPATH',None)
-    checked=subprocess.run([str(plan['python']),'-c','import agent_bridge; from agent_bridge.storage import probe_lock, readonly_database, durable_write, sync_directory; from agent_bridge.role_policy import readonly; print(agent_bridge.__version__)'],env=env,capture_output=True,timeout=15)
+    checked=subprocess.run([str(plan['python']),'-c','import agent_bridge; from agent_bridge.storage import probe_lock, readonly_database, durable_write, sync_directory; from agent_bridge.role_policy import readonly; print(agent_bridge.__version__)'],env=env,stdin=subprocess.DEVNULL,capture_output=True,timeout=15)
     if checked.returncode:raise ValueError('Selected Python needs the current agent_bridge runtime with connection and role policy support; install the updated package first')
     if before_write is not None: before_write()
     project=plan['project']

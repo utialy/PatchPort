@@ -1,5 +1,8 @@
 include README.md CONTRIBUTING.md AGENTS.md CLAUDE.md LICENSE CHANGELOG.md
 recursive-include docs *.md
+recursive-include docs/images *.png
+recursive-include desktop *.py *.md
+recursive-include packaging *.py *.md *.sh *.txt
 recursive-include examples *.json *.md
 recursive-include skills *.md *.yaml
 recursive-include tools *.py *.in

@@ -16,6 +16,13 @@ Write English prose. Comments should explain a constraint or decision that is no
 
 Follow [commit rules](docs/COMMIT_RULES.md). To enable the repository hooks for this checkout:
 
+For the Windows extension, use Node.js 24+ and an installed Python 3.11+ runtime
+in the checkout's .venv. From extensions/vscode run `npm ci`, `npm run check`,
+`npm test` and `npm run package`. Generated core copies/manifests, bundles and
+VSIX artifacts are excluded from commits. Screenshots use controlled mock data,
+generic paths and reviewed PNGs under docs/images; never capture live credentials
+or user conversations. See the [extension guide](docs/VSCODE_GUIDE.md).
+
 ```sh
 git config --local core.hooksPath .githooks
 ```

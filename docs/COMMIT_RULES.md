@@ -25,6 +25,10 @@ For a change that needs explanation, use a blank line after the subject and desc
 - Never commit credentials, `.env` files, operational queues, provider logs, request transcripts, virtual environments, build output, task copies, or private handoff history.
 - Use generic paths in examples. Do not include local usernames, home-directory paths, email addresses, or machine-specific project paths in documentation.
 - Review the staged diff and add explicit paths. Do not force-add an ignored directory to make a commit pass.
+- Reviewed extension/desktop/packaging source is allowed. Generated extension
+  core copies, manifests, bundles, node_modules and VSIX files remain excluded.
+  Screenshots belong under docs/images as bounded valid PNGs without text/EXIF
+  metadata, personal paths, credentials or live conversations.
 - Keep applicable license notices and third-party attribution. A style cleanup must not remove them.
 
 ## Checks

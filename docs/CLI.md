@@ -23,6 +23,21 @@ Use `run` without `--once` for a resident runner. Reuse an existing runner for t
 
 ## Execution controls
 
+Background lifecycle commands are separate from foreground `run`:
+
+```sh
+agent-bridge runner status
+agent-bridge runner start
+agent-bridge runner start --apply
+agent-bridge runner stop --run-id RUN_ID --apply
+agent-bridge runner stop --run-id RUN_ID --cancel-active --apply
+```
+
+Without --apply, start/stop only preview. Stop uses the observed exact run ID.
+Read the [runner guide](RUNNER_MANAGEMENT.md) for drain/cancel, unknown receipts
+and optional service boundaries. The VS Code workflow is described in the
+[screenshot walkthrough](VSCODE_GUIDE.md).
+
 ```sh
 agent-bridge pause
 agent-bridge limit --max-calls 10

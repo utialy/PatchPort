@@ -9,6 +9,8 @@ import stat
 import sys
 import time
 import uuid
+import contextlib
+import hashlib
 
 ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
@@ -44,6 +46,24 @@ def durable_write(path, data):
         os.fsync(stream.fileno())
 
 
+def private_write(path, data):
+    """Create a new private file without a permissive intermediate mode."""
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, 'wb') as stream:
+        stream.write(data)
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
+def check_private_owner(path):
+    """Refuse foreign or group/world-writable control files on POSIX."""
+    path = checked_local_path(path)
+    info = path.stat()
+    if os.name == 'posix' and (info.st_uid != os.getuid() or info.st_mode & 0o022):
+        raise ValueError('Control file ownership or permissions need inspection')
+    return path
+
+
 def atomic_json(path, value):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -57,6 +77,110 @@ def atomic_json(path, value):
     finally:
         temp.unlink(missing_ok=True)
 
+
+def checked_local_path(path, root=None):
+    """Reject link aliases before installation reads, writes, or explicit deletion."""
+    path = Path(path)
+    if not path.is_absolute() or (os.name == 'nt' and str(path).startswith('\\\\')):
+        raise ValueError('An absolute local path is required')
+    for item in (path, *path.parents):
+        if item.exists() or item.is_symlink():
+            info = item.lstat()
+            if (stat.S_ISLNK(info.st_mode) or getattr(info, 'st_file_attributes', 0) & 0x400
+                    or (stat.S_ISREG(info.st_mode) and info.st_nlink != 1)):
+                raise ValueError('Linked installation path is not supported: ' + str(item))
+    path = path.resolve()
+    if root is not None and (path == root or not path.is_relative_to(root)):
+        raise ValueError('Installation path escapes its owning root')
+    return path
+
+
+def canonical_selected_path(path):
+    """Freeze POSIX parent aliases while rejecting a linked selected directory."""
+    path = Path(os.path.abspath(path))
+    if os.name == 'nt':
+        return checked_local_path(path)
+    if path.is_symlink():
+        raise ValueError('The selected path must not be a symbolic link')
+    return checked_local_path(path.parent.resolve() / path.name)
+
+
+def write_executable(path, data):
+    """Create a new POSIX launcher without changing shell configuration."""
+    if os.name != 'posix':
+        raise RuntimeError('POSIX launcher creation requires a POSIX host')
+    durable_write(path, data)
+    Path(path).chmod(0o755)
+
+
+def remove_owned_launcher(path, expected, root):
+    """Delete one hash-matching launcher under the caller's installation lock."""
+    path = checked_local_path(path, root)
+    before = path.stat()
+    with path.open('rb') as stream:
+        opened = os.fstat(stream.fileno())
+        if ((opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)
+                or hashlib.file_digest(stream, 'sha256').hexdigest() != expected):
+            raise ValueError('Launcher changed before removal')
+        checked_local_path(path, root)
+        current = path.stat()
+        if (current.st_dev, current.st_ino, current.st_size, current.st_mtime_ns) != (
+                opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns):
+            raise ValueError('Launcher changed during removal')
+        path.unlink()
+    sync_directory(path.parent)
+
+
+@contextlib.contextmanager
+def guarded_removal(root, entries):
+    """Pin every Windows deletion candidate exclusively before deleting any file."""
+    if os.name != 'nt':
+        raise RuntimeError('Safe GUI removal is currently verified only on Windows')
+    import ctypes
+    from ctypes import wintypes as w
+    import msvcrt
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel.CreateFileW.argtypes = [w.LPCWSTR, w.DWORD, w.DWORD, ctypes.c_void_p,
+                                  w.DWORD, w.DWORD, w.HANDLE]
+    kernel.CreateFileW.restype = w.HANDLE
+    kernel.CloseHandle.argtypes = [w.HANDLE]
+    kernel.SetFileInformationByHandle.argtypes = [w.HANDLE, ctypes.c_int, ctypes.c_void_p, w.DWORD]
+    kernel.SetFileInformationByHandle.restype = w.BOOL
+    handles = {}
+    root = checked_local_path(root)
+    try:
+        for path, digest in entries:
+            path = checked_local_path(path, root)
+            # GENERIC_READ | GENERIC_WRITE | DELETE also rejects mapped executable images.
+            # No sharing, OPEN_EXISTING, OPEN_REPARSE_POINT; all handles stay pinned.
+            handle = kernel.CreateFileW(str(path), 0xC0010000, 0, None, 3, 0x00200000, None)
+            if handle == ctypes.c_void_p(-1).value:
+                raise ctypes.WinError(ctypes.get_last_error())
+            try:
+                fd = msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY)
+            except Exception:
+                kernel.CloseHandle(handle)
+                raise
+            stream = os.fdopen(fd, 'rb')
+            handles[path] = stream
+            info = os.fstat(stream.fileno())
+            if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                    or hashlib.file_digest(stream, 'sha256').hexdigest() != digest):
+                raise ValueError('Owned file changed; preserve it: ' + str(path))
+        def remove():
+            for path, stream in handles.items():
+                checked_local_path(path, root)
+                disposition = ctypes.c_ubyte(1)
+                handle = msvcrt.get_osfhandle(stream.fileno())
+                if not kernel.SetFileInformationByHandle(handle, 4, ctypes.byref(disposition), 1):
+                    raise ctypes.WinError(ctypes.get_last_error())
+                stream.close()
+                yield path
+        yield remove
+    finally:
+        for stream in handles.values():
+            stream.close()
+
 def load_config(path, *, data=None):
     path = Path(path).resolve()
     c = json.loads(path.read_text(encoding="utf-8-sig")) if data is None else dict(data)
@@ -67,7 +191,7 @@ def load_config(path, *, data=None):
     state.relative_to(root)
     if state == root:
         raise ValueError("State must be a subdirectory")
-    c.update(root=root, state=state)
+    c.update(root=root, state=state, config_path=str(path))
     from .context import validate, validate_required
     validate(c.get("context_budget", {}))
     validate_required(c.get("context_required", []))
@@ -92,6 +216,8 @@ def load_config(path, *, data=None):
         argv = endpoint.get("command")
         if not isinstance(argv, list) or not argv or not all(isinstance(s, str) and s for s in argv):
             raise ValueError("command must be a nonempty argument array")
+        from .child import validate_launch
+        validate_launch(endpoint.get('launch'))
         if endpoint.get("parallel", 1) not in range(1, 33):
             raise ValueError("Endpoint parallel must be 1..32")
     if not c.get("endpoints") or c.get("parallel", 2) not in range(1, 33):
@@ -113,6 +239,7 @@ class Store:
             db.execute("CREATE TABLE IF NOT EXISTS usage_snapshots (id TEXT PRIMARY KEY, data TEXT NOT NULL)")
             db.execute("CREATE TABLE IF NOT EXISTS context_plans (id TEXT PRIMARY KEY, data TEXT NOT NULL)")
             db.execute("CREATE TABLE IF NOT EXISTS role_tasks (id TEXT PRIMARY KEY, flow TEXT NOT NULL, role TEXT NOT NULL, data TEXT NOT NULL, UNIQUE(flow,role))")
+            db.execute("CREATE TABLE IF NOT EXISTS runner_lifecycle (id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL)")
     def connect(self):
         db = sqlite3.connect(self.db, timeout=15)
         db.row_factory = sqlite3.Row
@@ -171,9 +298,45 @@ class Store:
     def cancel_queued_role(self, id_, reason):
         with self.connect() as db:
             return db.execute("UPDATE tasks SET state='CANCELLED',finished=?,result=? WHERE id=? AND state='ROLE_QUEUED'", (time.time(), json.dumps(dict(error=reason)), id_)).rowcount == 1
-    def claim(self, id_):
+    def lifecycle(self):
+        with self.connect() as db:
+            row = db.execute("SELECT data FROM runner_lifecycle WHERE id=1").fetchone()
+            return json.loads(row[0]) if row else None
+
+    def register_runner(self, record):
+        # Caller holds runner.lock for the complete registered lifetime.
+        with self.connect() as db:
+            db.execute("INSERT OR REPLACE INTO runner_lifecycle VALUES (1,?)", (json.dumps(record),))
+
+    def runner_transition(self, run_id, *, mode=None, acknowledge=False, reason=None):
+        if mode not in (None, 'DRAINING', 'CANCELLING', 'STOPPED'):
+            raise ValueError('Invalid runner transition')
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT data FROM runner_lifecycle WHERE id=1").fetchone()
+            record = json.loads(row[0]) if row else None
+            if not record or record.get('protocol') != 1 or record.get('run_id') != run_id:
+                raise ValueError('Runner identity changed; inspect status')
+            if mode and record['mode'] != 'STOPPED':
+                if mode == 'STOPPED' or record['mode'] != 'CANCELLING':
+                    record['mode'] = mode
+                if mode == 'STOPPED': record.update(ended=time.time(), reason=reason)
+            if acknowledge: record['acknowledged'] = record['mode']
+            encoded = json.dumps(record)
+            if encoded != row[0]:
+                db.execute("UPDATE runner_lifecycle SET data=? WHERE id=1", (encoded,))
+            return record
+
+    def claim(self, id_, run_id=None):
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            lifecycle = db.execute("SELECT data FROM runner_lifecycle WHERE id=1").fetchone()
+            if lifecycle:
+                record = json.loads(lifecycle[0])
+                if record.get('mode') != 'STOPPED' or run_id is not None:
+                    if (record.get('protocol') != 1 or record.get('run_id') != run_id
+                            or record.get('mode') != 'RUNNING'):
+                        return False
             control = db.execute("SELECT * FROM control WHERE id=1").fetchone()
             if control["paused"] or (control["max_calls"] is not None and control["calls_started"] >= control["max_calls"]):
                 return False

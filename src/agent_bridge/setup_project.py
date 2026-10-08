@@ -9,6 +9,7 @@ import sys
 from . import connect, workspace
 from .runner import argv_for
 from .storage import load_config
+from .child import PROFILE_SHELLS, validate_launch
 
 
 STARTER = 'PATCHPORT_START.md'
@@ -31,7 +32,10 @@ def sensitive(name):
 
 def command_path(path):
     """Resolve a selected executable or a JS entry point without executing it."""
-    path = Path(path).expanduser().absolute()
+    selected = str(path)
+    if command_name(selected):
+        selected = shutil.which(selected) or selected
+    path = Path(selected).expanduser().absolute()
     if not path.is_file():
         raise ValueError('CLI file is missing; select an installed executable')
     if path.suffix.lower() == '.js':
@@ -46,6 +50,12 @@ def command_path(path):
     if os.name != 'nt' and not os.access(path, os.X_OK):
         raise ValueError('CLI file is not executable')
     return [str(path.resolve())]
+
+
+def command_name(value):
+    """Distinguish a PATH name from an explicit path or shell expression."""
+    return (isinstance(value, str) and bool(value) and value not in ('.', '..')
+            and not any(c in value for c in '/\\:\x00\r\n\t '))
 
 
 def discover(provider):
@@ -114,9 +124,14 @@ def diagnostics(endpoints):
         try:
             command = argv_for(endpoint, Path('unused-reply.txt'))
             raw_command = endpoint['command']
-            if len(raw_command) > 1 and raw_command[1].endswith('.js') and not Path(raw_command[1]).is_file():
+            if endpoint.get('launch') is None and len(raw_command) > 1 and raw_command[1].endswith('.js') and not Path(raw_command[1]).is_file():
                 raise ValueError('CLI JS entry point is missing')
             checks[name] = dict(status='FOUND', executable=command[0])
+            if endpoint.get('launch') is not None:
+                checks[name].update(shell=endpoint['launch']['shell'],
+                                    command=list(raw_command), command_status='NOT_CHECKED',
+                                    profile=endpoint['launch'].get('profile', 'DEFAULT'),
+                                    profile_status='NOT_LOADED')
         except (OSError, ValueError):
             checks[name] = dict(status='MISSING_OR_UNSUPPORTED',
                                 next_action='Install the official CLI or select a supported executable path')
@@ -219,8 +234,13 @@ def add_arguments(parser):
     parser.add_argument('--project', type=Path)
     parser.add_argument('--python', type=Path)
     parser.add_argument('--provider', action='append', choices=PROVIDERS)
-    parser.add_argument('--codex', type=Path, help='Native executable or CLI JS entry point')
-    parser.add_argument('--claude', type=Path, help='Native executable or CLI JS entry point')
+    for provider in PROVIDERS:
+        parser.add_argument('--' + provider, help='Command name, executable path, or CLI JS entry point')
+        parser.add_argument('--' + provider + '-shell', choices=PROFILE_SHELLS,
+                            help='Explicitly run the command inside a user profile shell')
+        parser.add_argument('--' + provider + '-shell-executable', help='Selected shell executable path or PATH name')
+        parser.add_argument('--' + provider + '-profile', type=Path,
+                            help='Load this profile instead of the shell default user profiles')
     parser.add_argument('--include', action='append', help='Project-relative input path; repeat for more paths')
     parser.add_argument('--writable', action='append', help='Explicit promotion scope; defaults to input paths')
     parser.add_argument('--starter', action='store_true', help='Create a small starter file only when applying')
@@ -242,6 +262,9 @@ def print_preview(report):
     print('Selected project rules: ' + (', '.join(report['selected_rules']) or 'none'))
     for name, check in report['diagnostics']['commands'].items():
         print(name + ': ' + check['status'] + ' - ' + check.get('executable', check.get('next_action', '')))
+        if 'shell' in check:
+            print('  Profile shell: ' + check['shell'] + '; command: ' + repr(check['command'])
+                  + '; profile: ' + check['profile'] + ' (not loaded; command not checked)')
     changes = [item for item in report['actions'] if item['action'] != 'keep']
     for item in changes: print(item['action'] + ': ' + item['path'])
     if not changes: print('Connection files are already up to date.')
@@ -249,8 +272,13 @@ def print_preview(report):
     print(report['note'])
 
 
-def choose_endpoint(provider, explicit, interactive):
-    if explicit:
+def choose_endpoint(provider, explicit, interactive, launch=None):
+    validate_launch(launch)
+    if launch is not None:
+        if not explicit:
+            raise ValueError('Profile shell mode requires an explicit command name or path')
+        command = [str(explicit)]
+    elif explicit:
         command = command_path(explicit)
     else:
         found = discover(provider)
@@ -262,13 +290,13 @@ def choose_endpoint(provider, explicit, interactive):
                 if item['status'] != 'FOUND':
                     print(item['path'] + ': ' + item['next_action'])
             if usable:
-                selection = ask(f'Select {provider} number, or enter its full executable path: ')
+                selection = ask(f'Select {provider} number, or enter its command name or executable path: ')
                 if selection.isdecimal() and 1 <= int(selection) <= len(usable):
                     command = usable[int(selection)-1]['command']
                 else:
                     command = command_path(selection)
             else:
-                selection = ask(f'{provider} not found. Enter its installed executable path (blank cancels): ')
+                selection = ask(f'{provider} not found. Enter its command name or executable path (blank cancels): ')
                 if not selection: raise EOFError
                 command = command_path(selection)
         elif len(usable) != 1:
@@ -276,6 +304,11 @@ def choose_endpoint(provider, explicit, interactive):
         else:
             command = usable[0]['command']
     endpoint = dict(adapter=provider, command=list(command), parallel=1)
+    if launch is not None:
+        endpoint['launch'] = dict(launch)
+        resolved = shutil.which(launch.get('executable', launch['shell']))
+        if resolved:
+            endpoint['launch']['executable'] = str(Path(resolved).resolve())
     if provider == 'codex':
         endpoint['sandbox'] = 'read-only'
     else:
@@ -302,7 +335,20 @@ def execute(args):
         existing = (project / 'bridge.json').exists()
         include, writable, starter = args.include, args.writable, args.starter
         endpoints = None
+        launches = {}
+        for p in PROVIDERS:
+            shell = getattr(args, p + '_shell')
+            executable = getattr(args, p + '_shell_executable')
+            profile = getattr(args, p + '_profile')
+            if (executable or profile) and not shell:
+                raise ValueError('--' + p + '-shell is required with shell executable or profile')
+            if shell:
+                launches[p] = dict(shell=shell)
+                if executable: launches[p]['executable'] = executable
+                if profile: launches[p]['profile'] = str(profile.expanduser().absolute())
         providers = args.provider or [p for p in PROVIDERS if getattr(args, p)]
+        if any(p not in providers for p in launches):
+            raise ValueError('Each profile shell must belong to a selected provider with an explicit command')
         if any(getattr(args, p) and p not in providers for p in PROVIDERS):
             raise ValueError('Each explicit CLI path must belong to a selected provider')
         if existing and (providers or include is not None or writable is not None or starter):
@@ -312,7 +358,7 @@ def execute(args):
                 providers = ask('Providers (codex, claude; comma-separated): ').replace(' ', '').split(',')
             if not providers or any(p not in PROVIDERS for p in providers):
                 raise ValueError('Select --provider codex and/or --provider claude')
-            endpoints = {p: choose_endpoint(p, getattr(args, p), interactive) for p in dict.fromkeys(providers)}
+            endpoints = {p: choose_endpoint(p, getattr(args, p), interactive, launches.get(p)) for p in dict.fromkeys(providers)}
             if not include and not starter and interactive:
                 print('Select only source files to send. Credentials and integration directories are not eligible.')
                 if project.is_dir():

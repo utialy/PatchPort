@@ -85,7 +85,10 @@ def report(store, days=None, endpoint=None, batch=None, group_by="endpoint"):
     # Read tasks and snapshots in one SQLite snapshot while the runner is writing.
     with store.connect() as db:
         db.execute("BEGIN")
-        rows = list(db.execute("SELECT t.*,u.data AS usage_data FROM tasks t LEFT JOIN usage_snapshots u ON t.id=u.id WHERE t.started IS NOT NULL ORDER BY t.created,t.id"))
+        has_usage = db.execute("SELECT 1 FROM sqlite_master WHERE name='usage_snapshots'").fetchone()
+        query = ("SELECT t.*,u.data AS usage_data FROM tasks t LEFT JOIN usage_snapshots u ON t.id=u.id"
+                 if has_usage else "SELECT t.*,NULL AS usage_data FROM tasks t")
+        rows = list(db.execute(query + " WHERE t.started IS NOT NULL ORDER BY t.created,t.id"))
     for row in rows:
         if endpoint is not None and row["endpoint"] != endpoint: continue
         if batch is not None and row["batch"] != batch: continue

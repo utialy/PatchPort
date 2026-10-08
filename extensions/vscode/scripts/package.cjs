@@ -1,0 +1,13 @@
+const fs = require("node:fs");
+const path = require("node:path");
+const { spawnSync } = require("node:child_process");
+const root = path.resolve(__dirname, "..");
+const manifest = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+const artifactDirectory = process.env.PATCHPORT_ARTIFACT_DIR || path.resolve(root, "../../.bridge/artifacts");
+const output = path.resolve(artifactDirectory, `patchport-${manifest.version}-win32-x64.vsix`);
+fs.mkdirSync(path.dirname(output), { recursive: true });
+const vsceManifest = require.resolve("@vscode/vsce/package.json");
+const bin = path.resolve(path.dirname(vsceManifest), JSON.parse(fs.readFileSync(vsceManifest, "utf8")).bin.vsce);
+const result = spawnSync(process.execPath, [bin, "package", "--out", output, "--target", "win32-x64", "--no-rewrite-relative-links"], { cwd: root, stdio: "inherit", windowsHide: true });
+if (result.error) throw result.error;
+process.exitCode = result.status ?? 1;

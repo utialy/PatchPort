@@ -22,6 +22,7 @@ def main(argv=None):
     sub = parser.add_subparsers(dest="action",required=True)
     sub.add_parser("init")
     sub.add_parser("doctor")
+    sub.add_parser('manage', help='Serve versioned local management JSON over inherited stdin/stdout pipes')
     from .connect import add_arguments, execute as connect_project
     connection = sub.add_parser("connect", help="Preview or install local project integration; no login or AI calls")
     add_arguments(connection)
@@ -38,6 +39,10 @@ def main(argv=None):
     preview.add_argument("--context-plan", help="Preview full/omit or reviewed summary selection without submitting")
     worker = sub.add_parser("run"); worker.add_argument("--once",action="store_true")
     sub.add_parser("status")
+    from .runner_manager import add_arguments as manager_arguments, execute as manage_runner
+    manager_arguments(sub.add_parser('runner', help='Preview, start, observe or stop a local runner'))
+    from .service_manager import add_arguments as service_arguments, execute as manage_service
+    service_arguments(sub.add_parser('service', help='Explicitly manage a user service and automatic start'))
     usage = sub.add_parser("usage", help="Report recorded usage; missing values remain unknown")
     usage.add_argument("--days", type=int)
     usage.add_argument("--endpoint")
@@ -62,6 +67,13 @@ def main(argv=None):
     recover = sub.add_parser("recover"); recover.add_argument("--task",required=True); recover.add_argument("--backup",required=True); recover.add_argument("--apply",action="store_true")
     args = parser.parse_args(argv)
     try:
+        if args.action == 'manage':
+            if args.config != 'bridge.json':
+                raise ValueError('manage uses explicit config paths in each request')
+            from .management import serve
+            return serve()
+        if args.action == 'runner': return manage_runner(args)
+        if args.action == 'service': return manage_service(args)
         if args.action == "setup":
             if args.config != "bridge.json":
                 raise ValueError("setup uses --project, not --config")
@@ -86,6 +98,9 @@ def main(argv=None):
                     argv = argv_for(endpoint, c["state"] / "doctor-reply.txt")
                     output["endpoints"][name] = argv[0]
                     output["checks"][name] = {"ok":True}
+                    if endpoint.get('launch') is not None:
+                        output['checks'][name].update(shell=endpoint['launch']['shell'],
+                                                     command_status='NOT_CHECKED', profile_status='NOT_LOADED')
                 except (OSError, ValueError) as exc:
                     output["endpoints"][name] = None
                     output["checks"][name] = {"ok":False,"error":str(exc)}
@@ -104,12 +119,12 @@ def main(argv=None):
                 if any(name not in c["endpoints"] for name in args.targets):
                     raise ValueError("Unknown endpoint")
                 saved_plan = context.freeze_plan(c, prompt, inventory, args.targets)
+        if args.action == 'run': return run(c, args.once) or 0
         store=Store(c["state"])
         if args.action == "submit":
             output={"tasks":store.submit(args.id,args.targets,prompt,c["endpoints"], saved_plan), "context":inventory}
             if saved_plan:
                 output["context"].update(scope="submitted_plan", plan_sha256=saved_plan["plan_sha256"], selection_applied_to_execution=True)
-        elif args.action == "run": return run(c,args.once) or 0
         elif args.action == "usage": output = usage_report(store,args.days,args.endpoint,args.batch,args.group_by)
         elif args.action == "prune":
             output = prune(c, args.days, args.ids, args.apply)

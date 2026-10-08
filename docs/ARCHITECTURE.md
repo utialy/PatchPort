@@ -1,5 +1,30 @@
 # Architecture
 
+## VS Code and the management core
+
+The extension owns interactive PTYs, a Webview/xterm board, directed routes and
+provider adapters. Direct terminals use the original project; batch/role workflows
+use selected copies. A bundled standard-library Python core exposes sequential
+versioned JSON-lines management requests. Read-only inspection creates no queue,
+runner or AI. Submission, runner start and promotion are separate explicit actions.
+
+One-use previews freeze input and recheck configuration, provenance, original/
+proposal hashes and allowed paths. The extension checks unsaved editors and
+invalidates in-flight previews when input changes. Unconfirmed mutations are not
+retried automatically. interactive_* tables retain managed session/event/delivery/
+usage separately from batch claims. Delivery is recorded before PTY input.
+
+Role jobs consume durable one-use launch receipts and share the existing parent
+queue/runner contract. Fixed helpers perform development, host checks, independent
+read-only review, explicit promotion/recovery and deletion-free archive operations.
+Windows launcher PID and actual Python job PID are distinguished.
+
+Atomic workspace snapshots preserve board/config, paused groups, round/counts and
+history with corruption/other-writer protection. Restart neither starts an AI nor
+resends uncertain input. Exact recorded provider UUID resume and runtime integrity
+checks are explicit. See the [walkthrough](VSCODE_GUIDE.md) and
+[runner guide](RUNNER_MANAGEMENT.md).
+
 ## Runtime
 
 | Module | Responsibility |

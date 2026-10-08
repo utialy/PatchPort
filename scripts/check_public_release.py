@@ -5,20 +5,49 @@ from pathlib import Path, PurePosixPath
 import posixpath
 import re
 import subprocess
+import struct
+import zlib
 
 ROOT_FILES = {'.gitignore', '.gitattributes', 'README.md', 'AGENTS.md', 'CLAUDE.md',
               'CONTRIBUTING.md', 'LICENSE', 'pyproject.toml', 'MANIFEST.in', 'CHANGELOG.md', 'setup.py'}
-ROOT_DIRS = {'src', 'tests', 'tools', 'scripts', 'skills', 'examples', 'docs', '.github', '.githooks'}
+ROOT_DIRS = {'src', 'tests', 'tools', 'scripts', 'skills', 'examples', 'docs', '.github', '.githooks', 'extensions', 'desktop', 'packaging'}
 EXCLUDED = {'.git', '.venv', '__pycache__', '.bridge', '.agent-bridge', '.role-flows',
             '.bridge-requests', '.bridge-integration-backups', 'workspaces', 'build', 'dist', 'node_modules'}
 REQUIRED = {'README.md', 'LICENSE', 'pyproject.toml', 'AGENTS.md', 'CONTRIBUTING.md',
             'docs/COMMIT_RULES.md', 'scripts/check_public_release.py'}
-TEXT_SUFFIXES = {'.py', '.md', '.toml', '.json', '.yml', '.yaml', '.in'}
+TEXT_SUFFIXES = {'.py', '.md', '.toml', '.json', '.yml', '.yaml', '.in', '.ts', '.cjs', '.ps1', '.css', '.svg', '.sh', '.txt'}
 SUBJECT = re.compile(r'(feat|fix|docs|test|refactor|perf|build|ci|chore|revert)(\([a-z0-9-]+\))?: [a-z].+')
 TOKENS = [re.compile(rb'-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----'),
           re.compile(rb'\bsk-(?:proj-|ant-)?[A-Za-z0-9_-]{24,}'),
           re.compile(rb'\bgh[pousr]_[A-Za-z0-9]{30,}')]
 LOCAL_PATH = re.compile(r'(?:[A-Za-z]:[/\\](?:Users|!Projects)[/\\]|/(?:home|Users)/[A-Za-z0-9_.-]+/)', re.I)
+
+
+def check_png(data):
+    """Accept bounded screenshots without text or EXIF metadata."""
+    if len(data) > 5 * 1024 * 1024 or not data.startswith(b'\x89PNG\r\n\x1a\n'):
+        return ['screenshot must be a PNG of at most 5 MiB']
+    offset, chunks = 8, []
+    try:
+        while offset < len(data):
+            length = struct.unpack_from('>I', data, offset)[0]
+            kind = data[offset + 4:offset + 8]
+            end = offset + 12 + length
+            if end > len(data) or kind not in (b'IHDR', b'IDAT', b'IEND', b'sRGB', b'gAMA', b'pHYs', b'cHRM'):
+                return ['invalid PNG chunk or unreviewed screenshot metadata']
+            if zlib.crc32(data[offset + 4:end - 4]) & 0xffffffff != struct.unpack_from('>I', data, end - 4)[0]:
+                return ['PNG checksum mismatch']
+            if kind == b'IHDR':
+                width, height = struct.unpack_from('>II', data, offset + 8)
+                if length != 13 or not 1 <= width <= 4096 or not 1 <= height <= 4096:
+                    return ['screenshot dimensions exceed the reviewed limit']
+            chunks.append(kind)
+            offset = end
+        if not chunks or chunks[0] != b'IHDR' or chunks[-1] != b'IEND' or b'IDAT' not in chunks:
+            return ['incomplete PNG screenshot']
+    except struct.error:
+        return ['invalid PNG screenshot']
+    return []
 
 
 def check_content(name, data):
@@ -29,10 +58,15 @@ def check_content(name, data):
             or (len(path.parts) > 1 and path.parts[0] not in ROOT_DIRS)):
         errors.append('path is outside the public file layout')
     if (any(p in EXCLUDED or p.endswith('.egg-info') for p in path.parts)
+            or name.startswith('extensions/vscode/core/') or name == 'extensions/vscode/runtime-manifest.json'
             or path.name.startswith(('.env', 'HANDOFF')) or path.name == 'NEXT_SESSION.md'
             or path.suffix in {'.pyc', '.pyo', '.pyd', '.db', '.sqlite3', '.log'}):
         errors.append('private or generated file is not allowed')
-    if name not in ROOT_FILES and path.parts and path.parts[0] != '.githooks' and path.suffix not in TEXT_SUFFIXES:
+    if re.fullmatch(r'docs/images/[a-z0-9-]+\.png', name):
+        return errors + check_png(data)
+    if name.endswith(('/.gitignore', '/.vscodeignore', '/LICENSE')):
+        pass
+    elif name not in ROOT_FILES and path.parts and path.parts[0] != '.githooks' and path.suffix not in TEXT_SUFFIXES:
         errors.append('unsupported file type; review the policy before adding it')
     try:
         text = data.decode('utf-8')
@@ -75,6 +109,10 @@ def tree_files(root):
                 raise ValueError('Symlinks are not allowed in the public checkout')
         for name in names:
             path = Path(current) / name
+            if path.relative_to(root).as_posix() == 'extensions/vscode/runtime-manifest.json':
+                continue
+            if path.relative_to(root).as_posix().startswith('extensions/vscode/core/'):
+                continue
             if path.suffix in {'.pyc', '.pyo'}:
                 continue
             files[path.relative_to(root).as_posix()] = path.read_bytes()
