@@ -102,6 +102,9 @@ def delivery(path, owner, data):
     identifier(owner)
     if not isinstance(data, dict):
         raise ValueError('Invalid delivery')
+    data = dict(data)
+    if 'project' in data:
+        data['project'] = str(checked_local_path(data['project']))
     identifier(data.get('id'))
     if data.get('status') not in ('queued', 'sent', 'accepted', 'completed', 'uncertain', 'cancelled'):
         raise ValueError('Invalid delivery status')
