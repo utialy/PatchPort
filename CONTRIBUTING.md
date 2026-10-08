@@ -4,7 +4,7 @@ Use an isolated environment with the package installed:
 
 ```sh
 python -m pip install .
-python -m unittest discover -s tests -v
+python scripts/run_tests.py
 python scripts/check_public_release.py --tree
 ```
 

@@ -3,10 +3,13 @@ on: [push, pull_request]
 jobs:
   test:
     strategy:
+      fail-fast: false
       matrix:
         os: [windows-latest, ubuntu-latest, macos-latest]
         python: ['3.11', '3.12', '3.13', '3.14']
     runs-on: ${{ matrix.os }}
+    env:
+      PYTHONPATH: ${{ github.workspace }}/src
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -14,7 +17,7 @@ jobs:
           python-version: ${{ matrix.python }}
       - run: python -m pip install .
       - run: python scripts/check_public_release.py --staged
-      - run: python -m unittest discover -s tests -v
+      - run: python scripts/run_tests.py
   vscode-extension:
     runs-on: windows-latest
     defaults:

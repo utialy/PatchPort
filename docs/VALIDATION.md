@@ -13,7 +13,7 @@ simulation checks passed. A polling fixture waits for the durable role-job
 completion receipt before reading its final result, avoiding Windows atomic-file
 replacement/read races.
 
-The English VS Code 0.3.0 extension passed type checking and 30 tests on Windows,
+The English VS Code 0.3.0 extension passed type checking and 31 tests on Windows,
 including actual mock PTYs, profile functions, routed responses, recording failure
 protection, one-use core plans, first-queue ledger retention, Windows path casing,
 board snapshots and runtime integrity. Node.js 24.14.0 built a Windows x64 VSIX
@@ -26,6 +26,12 @@ Seven screenshots use the actual compiled English Webview rendered in Chrome
 with isolated mock task/role/ledger data and generic paths. They are examples,
 not live provider responses or account usage. Screenshot/link/content policy
 checks passed. No real AI provider was called for this public update.
+
+The first hosted run exposed a checkout/installed-helper test configuration mix
+and a Windows usage-path spelling assumption. Checkout tests now explicitly use
+the source runner while installed CLI checks remain independent. Usage collection
+checks link ancestry and opened file identity instead of textual realpath equality;
+a case-variant/junction regression passed locally.
 
 Other-OS/remote extension execution and current live provider formats/authentication
 were not measured by these Windows/mock checks. The additional Windows extension
