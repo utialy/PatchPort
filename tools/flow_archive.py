@@ -68,6 +68,11 @@ def _read(root, relative):
 
 
 def load_archive(project, flow):
+    from agent_bridge.records_flow import require
+    from agent_bridge.storage import load_config
+    config_path=Path(project)/'bridge.json'
+    if config_path.exists():
+        require(load_config(config_path),flow)
     """Validate metadata/records only. Blob integrity is checked on evidence read."""
     identifier(flow)
     project = Path(project).resolve()

@@ -19,7 +19,11 @@ class ReleasePolicyTests(unittest.TestCase):
     def test_only_reviewed_screenshot_paths_accept_valid_png(self):
         data = self.png()
         self.assertEqual(policy.check_content('docs/images/board.png', data), [])
+        self.assertEqual(policy.check_content('extensions/vscode/media/symbol.png', data), [])
+        self.assertTrue(policy.check_content('extensions/vscode/media/other.png', data))
         self.assertTrue(policy.check_content('examples/board.png', data))
+        for name in ('desktop/app.py','packaging/windows/build.py','src/agent_bridge/install_manager.py','src/agent_bridge/posix_install.py'):
+            self.assertTrue(policy.check_content(name,b'pass\n'))
         self.assertTrue(policy.check_content('docs/images/board.png', b'not a PNG'))
         self.assertTrue(policy.check_content('docs/images/board.png', data[:-1]))
         self.assertTrue(policy.check_content('docs/images/board.png', data + b'unreviewed'))

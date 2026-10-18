@@ -138,6 +138,8 @@ def response(outcome, run_id=None, accepted=False, **extra):
 
 
 def start(config, timeout=10):
+    from .records_guard import check_start
+    check_start(config)
     validate_timeout(timeout)
     from .service_manager import registration, start as service_start
     if registration(config):
@@ -232,7 +234,7 @@ def stop(config, run_id, cancel=False, timeout=10, *, _service=False, _lock_held
         if (not status['lock_held'] or not isinstance(beat, dict)
                 or beat.get('management', {}).get('run_id') != run_id):
             raise ValueError('Runner ownership cannot be confirmed')
-        store = Store(config['state'])
+        store = Store(config['state'], config=config)
         store.runner_transition(run_id, mode='CANCELLING' if cancel else 'DRAINING')
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:

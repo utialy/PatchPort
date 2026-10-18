@@ -8,3 +8,10 @@
 .workflow-changes label { display: flex; gap: 10px; align-items: center; margin: 9px 0; }
 .workflow-form button { margin: 4px; }
 .workflow-diff pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow: auto; }
+.data-inventory { table-layout: fixed; }
+.data-inventory td, .data-inventory th { overflow-wrap: anywhere; vertical-align: top; }
+.data-inventory th:first-child { width: 38%; }
+.copy-inventory { table-layout: fixed; }
+.copy-inventory td, .copy-inventory th { overflow-wrap: anywhere; vertical-align: top; }
+.copy-inventory th:first-child { width: 12%; }
+.copy-inventory th:nth-child(2) { width: 32%; }

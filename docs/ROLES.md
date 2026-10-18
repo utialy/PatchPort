@@ -2,7 +2,7 @@
 
 ## Connect Codex and Claude Code
 
-Current source builds provide `agent-bridge connect` and bundle its installation assets in the wheel. The published 0.1.0a2 wheel predates this command; install the current source version before using it.
+The extension bundles fixed connection/role helpers. Its internal Python backend provides `agent-bridge connect` for explicit project setup and preserves existing CLI authentication.
 
 1. Install PatchPort as described in the [README](../README.md#install), and install and authenticate the provider CLIs you want to use.
 2. Run `agent-bridge setup --project /path/to/project` to select CLIs and input files, then confirm the preview. The [wizard](SETUP.md) creates the configuration and connection files without starting a runner. It preserves an existing bridge.json. Authentication is not tested.

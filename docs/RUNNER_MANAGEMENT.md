@@ -44,8 +44,6 @@ Cancel active work & stop, and batch controls. These are distinct from terminal-
 stop and route pause. Closing a management window/core connection does not stop a
 confirmed queue runner.
 
-An explicitly registered user service uses its backend through the same identity
-checks. Registration/start/login auto-start remain separate choices. See
-[service sources](../packaging/services/README.md) for systemd and the experimental
-macOS LaunchAgent backend. Native macOS login/lifetime checks remain outstanding;
-WSL/systemd and simulated LaunchAgent checks are not substitutes.
+Existing service registrations retain their identity checks. They can block
+unsafe reconnection, cleanup or a manual runner that would bypass their owner.
+The extension does not install an OS service or migrate an existing registration.

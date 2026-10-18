@@ -1,72 +1,47 @@
 # Validation
 
-## Current source: VS Code and guarded project workflows
+## Current extension 0.4.0
 
-On 2026-10-08 the independent public checkout was built and installed in a fresh
-Windows x64 environment. Python 3.14.6 ran 427 tests: 419 passed and eight
-platform/permission-specific checks were skipped. The suite includes nine public
-content-policy checks. Unicode fixtures retain their original values through
-source escapes; changed shared Python files were compared with the development
-source's parsed syntax. Read-only, queue/claim, runner, interactive ledger,
-input/provenance, promotion/recovery, role/test/cleanup/archive and service
-simulation checks passed. A polling fixture waits for the durable role-job
-completion receipt before reading its final result, avoiding Windows atomic-file
-replacement/read races.
+The product is the English Windows x64 VS Code extension. Tests use new temporary
+projects and controlled mock providers; no real provider call is part of the
+release checks. Backend tests require an isolated installed package as well as
+the source tree. Generated runtimes, virtual environments, logs and VSIX artifacts
+are excluded from commits.
 
-The English VS Code 0.3.0 extension passed type checking and 31 tests on Windows,
-including actual mock PTYs, profile functions, routed responses, recording failure
-protection, one-use core plans, first-queue ledger retention, Windows path casing,
-board snapshots and runtime integrity. Node.js 24.14.0 built a Windows x64 VSIX
-using VSCE 4.0.0. The locked dependency audit reported zero vulnerabilities after
-updating this build-only tool. An isolated VS Code 1.140.0 installation was checked
-for core access, unsaved-editor protection, selected promotion/recovery and its
-English bundled guide.
+Run the independent checks described in [CONTRIBUTING](../CONTRIBUTING.md): Python
+unittest discovery, public tree/staged policy, extension type checking/tests, and
+VSIX packaging. The Windows extension requires Python 3.11+ and Node.js 24+ for
+source builds. Its VSIX includes the core/helpers, not the interpreter.
 
-Seven screenshots use the actual compiled English Webview rendered in Chrome
-with isolated mock task/role/ledger data and generic paths. They are examples,
-not live provider responses or account usage. Screenshot/link/content policy
-checks passed. No real AI provider was called for this public update.
+Coverage includes explicit project selection, copy and body cleanup, writer/SQL
+guards, response-loss receipt lookup, same-operation I/O resume, config-free
+connection results, usage/ID/original/backup retention and host restoration.
+Release-local measurements are recorded after execution below.
 
-The first hosted run exposed a checkout/installed-helper test configuration mix
-and a Windows usage-path spelling assumption. Checkout tests now explicitly use
-the source runner while installed CLI checks remain independent. Usage collection
-checks link ancestry and opened file identity instead of textual realpath equality;
-a case-variant/junction regression passed locally.
+## Measured on Windows, 2026-10-18
 
-Other-OS/remote extension execution and current live provider formats/authentication
-were not measured by these Windows/mock checks. The additional Windows extension
-CI job is configured; hosted results must be inspected independently. Existing
-0.1.0a2 release assets are unchanged. The historical results below describe their
-original release/source revisions.
+- Python 3.14.6: 535 backend/policy tests, 534 passed and one platform skip.
+- Node.js 24.14.0: extension type checking/build and all 59 tests passed.
+- VS Code 1.142.0 with a fresh isolated profile: actual controller and bundled
+  core, English Chrome views at 1500x1000 and 1000x760, four separately reviewed
+  cleanup stages, partial metadata failure after configuration removal,
+  receipt rediscovery/same-operation resume, and fresh-host restoration passed.
+- Original files, another workspace, connection backups, positive claim use
+  (3 of 9) and group counts/rounds were preserved. No real AI call was made.
+- English Windows x64 VSIX: 123 entries, 42 Python runtime files; manifest hashes,
+  exact source icon bytes, absence of retired installer modules, isolated install,
+  activation and configuration-free cleanup result lookup passed.
+- Public tree/encoding/local links and nine focused policy tests passed. These
+  local results do not claim unexecuted remote CI jobs or native provider checks.
 
-## Current source changes: guided project setup
+## Platform boundaries
 
-On 2026-09-30, a wheel built from the public checkout was installed into an isolated Windows environment. Python 3.14.6 ran 269 tests: 266 passed and three permission-dependent symlink tests were skipped (83.947 seconds). Public release policy and local documentation link checks passed. Tests cover CLI discovery without execution, input/configuration changes after preview, ownership preservation, cancellation, partial writes, and canonical project paths.
+The extension currently supports validated local Windows x64 use. Remote/WSL/macOS
+extension sessions and native provider/service/first-use checks on other systems
+are not implied by portable core tests or a CI matrix. Windows-specific deletion
+tests skip on other platforms. Missing usage remains unknown.
 
-Both the module and native console entry points connected temporary new and existing projects outside the checkout. Previews left target files unchanged, application created local connection files, and repeat application was unchanged. No queue or runner was created, and no real provider was called. Imported runtime files came from site-packages and matched the reviewed public source.
-
-Linux and macOS were not rerun locally for this update. Parent-alias handling has a simulated regression check; it is not a direct macOS measurement. Remote CI results must be checked separately. The published 0.1.0a2 release assets remain unchanged; use a current source build for setup.
-
-## Current source changes: connection CLI and reviewed summaries
-
-On 2026-09-28, a wheel built from the updated public source was installed into a fresh Windows environment. Python 3.14.6 ran 245 tests: 243 passed and two permission-dependent symlink tests were skipped (88.262 seconds). The public policy checks passed. The native console preview and module-based connection installation also passed from a temporary project outside the checkout, without creating a queue or calling a provider.
-
-The wheel contains the summary runtime and 12 connection assets. The source archive includes setup.py and the summary guide. Packaging checks found no private inquiry, handoff, or operational files. No real provider calls were made. Linux and macOS were not rerun locally for this public import; the previous release results below do not establish coverage of these changes. These source changes have not been published as replacement 0.1.0a2 release assets.
-
-## Published 0.1.0a2
-
-Version 0.1.0a2 was validated on 2026-09-27 using a wheel installed in fresh virtual environments. Test folders contained helpers, skills, scripts, and tests, but no runtime source tree. The imported runtime came from site-packages and matched the public source bytes.
-
-| Environment | Unit tests | Entry points and console task |
-| --- | --- | --- |
-| Windows 11 / Python 3.14.6 | 219 passed, 2 skipped; 82.371 seconds | Module and native console help; mock submit/run/result passed |
-| Ubuntu on WSL 2 / Python 3.14.4 | 221 passed, no skips; 34.723 seconds | Module and console help; mock submit/run/result passed |
-| Ubuntu on WSL 2 / Python 3.11.16 | 221 passed, no skips; 34.362 seconds | Module and console help; mock submit/run/result passed |
-
-Windows skips were permission-dependent symlink tests. Mock reparse-point coverage still ran. The suite includes seven public-release policy tests in addition to the runtime and helper regression tests. Archive coverage includes unchanged originals/queues, shared and private queues, retention and recovery protection, binary/empty evidence, publication failures, explicit continuation, and changed/corrupt evidence rejection.
-
-The README's account-free example was executed on Windows. It creates a local command task without provider authentication or network calls. No real provider calls were made for this release validation.
-
-The source distribution includes all project helpers, launcher templates, skills, and tests. The wheel includes the MIT license and both runtime entry points. Archive contents were checked for private state and handoff files. A documentation-only rebuild is checked against the tested runtime/helper/test bytes; final package installation and the documented example are checked separately.
-
-The [first remote CI run](https://github.com/utialy/PatchPort/actions/runs/36303720601) passed all 12 jobs for commit `987d5c5`: Windows, Ubuntu, and macOS runners with Python 3.11, 3.12, 3.13, and 3.14. Each job installed the package, checked the public release policy, and ran the unit suite. This establishes hosted CI coverage, including macOS; it does not establish real provider authentication or behavior on those systems. Real provider calls remain separate from mock-provider unit tests.
+No cleanup check establishes forensic disk erasure or deletion of provider-side
+history. Historical/private/shared data, unknown writers, recovery evidence and
+service registrations remain protected. Provider authentication and operational
+runtime/service installations are not changed by release validation.

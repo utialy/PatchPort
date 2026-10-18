@@ -120,7 +120,7 @@ def main(argv=None):
                     raise ValueError("Unknown endpoint")
                 saved_plan = context.freeze_plan(c, prompt, inventory, args.targets)
         if args.action == 'run': return run(c, args.once) or 0
-        store=Store(c["state"])
+        store=Store(c["state"], config=c)
         if args.action == "submit":
             output={"tasks":store.submit(args.id,args.targets,prompt,c["endpoints"], saved_plan), "context":inventory}
             if saved_plan:

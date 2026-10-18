@@ -35,6 +35,8 @@ def flow_header(project, flow_id):
     project = Path(project).resolve()
     identifier(flow_id)
     base = load_config(safe(project, 'bridge.json'))
+    from agent_bridge.records_flow import require
+    require(base,flow_id)
     if base['root'] != project:
         raise ValueError('Requires configured project root')
     if Path.cwd().resolve().is_relative_to(project / '.role-flows') or Path.cwd().resolve().is_relative_to(base['state'] / 'workspaces'):
@@ -46,7 +48,7 @@ def flow_header(project, flow_id):
     return project, base, flow, saved
 
 
-def resolve(project, flow_id, role, *, database_reader=None):
+def resolve(project, flow_id, role, *, database_reader=None, allow_unstarted=False):
     if role not in ('developer', 'reviewer'):
         raise ValueError('Unknown role')
     project, base, flow, saved = flow_header(project, flow_id)
@@ -94,7 +96,8 @@ def resolve(project, flow_id, role, *, database_reader=None):
         raise ValueError('Role task is not terminal; inspect status first')
     home = safe(project, (state / 'workspaces' / task).relative_to(project).as_posix())
     result = json.loads(row['result'] or '{}')
-    if not isinstance(result, dict) or result.get('workspace') != str(home):
+    unstarted=allow_unstarted and shared and row['state']=='CANCELLED' and row['started'] is None and isinstance(result,dict) and result.get('workspace') is None
+    if not isinstance(result, dict) or (result.get('workspace') != str(home) and not unstarted):
         raise ValueError('Unexpected recorded workspace')
     return dict(project=project, base=base, config=config, queue=queue, home=home,
                 row=row, saved=saved, shared=shared, task=task, result=result, active_roles=active_roles)

@@ -41,7 +41,7 @@ def argv_for(endpoint, reply, *, cwd=None):
     return profile_argv(argv, endpoint['launch'], cwd=cwd) if endpoint.get('launch') is not None else argv
 
 def execute(config, row, stop_event, store=None):
-    store = store if store is not None else Store(config["state"])
+    store = store if store is not None else Store(config["state"], config=config)
     id_ = row["id"]
     result = {"id": id_, "endpoint": row["endpoint"]}
     proc = None
@@ -120,7 +120,7 @@ def execute(config, row, stop_event, store=None):
                             if event.get("type") == "item.completed" and event.get("item",{}).get("type") == "agent_message": agent_message = event["item"].get("text", "")
                             if event.get("type") in ("turn.failed", "error"): failed = True
                 with PRINT_LOCK:
-                    try: print(f"[{id_}][{label}] {text.rstrip()[:500]}",flush=True)
+                    try: print(f"[{id_}][{label}] " + (f"{len(text.encode('utf-8'))} bytes recorded" if store.protected else text.rstrip()[:500]),flush=True)
                     except (OSError, UnicodeError): pass  # Progress output must not abort provider work.
             code = proc.wait(timeout=10)
         exit_file = home / "exit-code.txt"
@@ -173,13 +173,19 @@ def role_config(parent, row, store):
 
 
 def run(config, once=False, *, task_ids=None, expected=None, backend='manual', service_id=None):
+    from .records_guard import runner_scope
+    with runner_scope(config) as writer:
+        return _run(config, once, task_ids=task_ids, expected=expected, backend=backend, service_id=service_id, writer=writer)
+
+
+def _run(config, once=False, *, task_ids=None, expected=None, backend='manual', service_id=None, writer=None):
     configure_output()
     stop = threading.Event()
     from .child import drain_on_termination
     with FileLock(config["state"] / "runner.lock"), drain_on_termination() as terminating:
         from .service_manager import guard_execution
         guard_execution(config, backend, service_id, running=True)
-        store = Store(config["state"])
+        store = Store(config["state"], config=config, writer=writer)
         # Capture once: later source edits must not refresh the running identity.
         identity = code_identity()
         started = time.time()

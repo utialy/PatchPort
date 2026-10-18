@@ -1,5 +1,6 @@
 """Consume one durable role launch receipt; never retry an accepted workflow."""
 import argparse
+import contextlib
 import json
 import os
 import time
@@ -16,6 +17,18 @@ def main(argv=None):
     args = parser.parse_args(argv)
     config = runner_manager.checked_config(args.config)
     flow_id = identifier(args.id)
+    from . import records_flow
+    if records_flow.supported(config,live=True):
+        receipt=workspace.safe(config['state'],'p1-jobs/'+flow_id+'.json')
+        ticket=json.loads(receipt.read_text(encoding='utf-8'))
+        lifetime=records_flow.Writer(config,flow_id,ticket.get('flow_owner'))
+    else:
+        lifetime=contextlib.nullcontext(None)
+    with lifetime as writer:
+        return execute(config,flow_id,args,writer)
+
+
+def execute(config,flow_id,args,writer):
     root = workspace.safe(config['state'], 'p1-jobs')
     receipt = workspace.safe(root, flow_id + '.json')
     with FileLock(root / 'start.lock'):
@@ -26,9 +39,9 @@ def main(argv=None):
         atomic_json(receipt, ticket)
     try:
         prompt = workspace.safe(root, flow_id + '.txt').read_text(encoding='utf-8')
-        if p1.role_start_report(config, dict(flow_id=flow_id, prompt=prompt)) != ticket['expected']:
+        if p1.role_start_report(config, dict(flow_id=flow_id, prompt=prompt),accepted=True) != ticket['expected']:
             raise ValueError('Role input changed after launch preview')
-        result = p1.helper('role_flow').develop_review(config['root'], prompt, flow_id)
+        result = p1.helper('role_flow').develop_review(config['root'], prompt, flow_id, flow_writer=writer)
         ticket.update(state='FINISHED', workflow_state=result['state'])
         code = 0 if result['state'] == 'REVIEW_DONE' else 2
     except (OSError, ValueError, RuntimeError, KeyError, TypeError):

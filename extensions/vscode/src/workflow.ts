@@ -3,7 +3,12 @@ import { promises as fs } from "node:fs";
 import { createHash } from "node:crypto";
 import type { Profile } from "./model";
 
-export const workflowActions = new Set(["context.inventory", "batch.preview", "proposal.inspect", "proposal.preview", "recovery.preview", "roles.overview", "roles.preview", "roles.inspect", "roles.log", "roles.promote.preview", "roles.recover.preview", "roles.prune.preview", "archive.preview", "archive.resume.preview"]);
+export const workflowActions = new Set(["context.inventory", "copies.list", "copies.prune.preview", "batch.preview", "proposal.inspect", "proposal.preview", "recovery.preview", "roles.overview", "roles.preview", "roles.inspect", "roles.log", "roles.promote.preview", "roles.recover.preview", "roles.prune.preview", "archive.preview", "archive.resume.preview"]);
+export function cleanupRoots(action: string, report: any): string[] {
+  if (action === "roles.prune.preview") return typeof report.workspace === "string" ? [report.workspace] : [];
+  if (action === "copies.prune.preview") return (report.items || []).map((item: any) => item.artifact?.path).filter((value: unknown) => typeof value === "string");
+  return [];
+}
 export function dirtyConflicts(roots: string[], paths: string[], dirty: string[]): string[] {
   const canonical = (value: string) => { const full = path.resolve(value); return process.platform === "win32" ? full.toLowerCase() : full; };
   const targets = roots.flatMap(root => paths.map(rel => canonical(path.join(root, rel))));

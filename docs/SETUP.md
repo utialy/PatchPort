@@ -1,6 +1,6 @@
 # Project setup
 
-Current source builds provide `agent-bridge setup` and `python -m agent_bridge setup`. The previously published 0.1.0a2 release assets do not include the wizard; install the current source version.
+The extension uses the internal `agent-bridge setup` / `python -m agent_bridge setup` backend to connect a project for selected-copy workflows. Use the Python chosen in patchport.corePython.
 
 ## Interactive setup
 

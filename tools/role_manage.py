@@ -1,6 +1,7 @@
 """Explicit role promotion, recovery and artifact cleanup; never submits AI work."""
 import argparse
 import contextlib
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -10,8 +11,8 @@ import time
 
 from agent_bridge import workspace
 from agent_bridge.answers import preserve_before_prune
-from agent_bridge.cleanup import candidate, inspect_tree
-from agent_bridge.storage import FileLock, Store, configure_output, identifier
+from agent_bridge.cleanup import candidate, copy_guard, delete_artifacts, inspect_tree
+from agent_bridge.storage import FileLock, Store, checked_local_path, configure_output, identifier, probe_lock, readonly_database
 from role_review import inspect, resolve, safe, object_json
 import flow_lifecycle
 
@@ -122,14 +123,78 @@ def recover(project, flow, role, task, backup, apply=False):
                     journal=workspace.recover(record['config'], task, backup, apply))
 
 
-def prune(project, flow, role, task, days=30, apply=False):
+def role_copy_guard(record, flow):
+    archive = safe(record['project'], '.role-flows/' + flow + '/archive')
+    journal = archive.parent / 'cleanup.json'
+    data = dict(copy=copy_guard(record['config'], record['row']),
+                saved=record['saved'], config=record['config'], base=record['base'],
+                queue=record['queue'], shared=record['shared'],
+                archive=workspace.digest(archive / 'manifest.json'), journal=workspace.digest(journal))
+    return hashlib.sha256(json.dumps(data, sort_keys=True, default=str, allow_nan=False).encode()).hexdigest()
+
+
+def preview_prune(project, flow, role, task, days=30, *, freeze=True):
+    """Observe role cleanup without creating locks, databases, or archive files."""
+    if type(days) is not int or not 1 <= days <= 3650:
+        raise ValueError('days must be 1..3650')
+    record = resolve(project, flow, role, database_reader=readonly_database)
+    if record['task'] != identifier(task):
+        raise ValueError('Explicit task ID does not match role')
+    cutoff = time.time() - days * 86400
+    artifact = candidate(record['config'], record['row'], cutoff)
+    archive = 'ABSENT'
+    if record['saved'].get('state') not in FINISHED_PHASES or record['active_roles']:
+        artifact.update(eligible=False, reason='FLOW_ACTIVE_OR_INCOMPLETE')
+    flow_home = safe(record['project'], '.role-flows/' + flow)
+    if (flow_home / 'archive').exists() or (flow_home / 'cleanup.json').exists():
+        try:
+            from flow_archive import load_snapshot
+            load_snapshot(record['project'], flow)
+            archive = 'ARCHIVE_READY'
+        except (OSError, ValueError, TypeError, KeyError):
+            archive = 'UNCONFIRMED'
+            artifact.update(eligible=False, reason='FLOW_ARCHIVE_PENDING')
+    states = {record['base']['state'], record['config']['state']}
+    for relative in ('developer-state', 'review-input/.agent-bridge'):
+        state = safe(record['project'], '.role-flows/' + flow + '/' + relative)
+        if state.exists():
+            states.add(state)
+    locks = [flow_lifecycle.lock_path(record['project'], record['base'], flow)]
+    locks.extend(state / name for state in sorted(states) for name in ('runner.lock', 'promotion.lock'))
+    if any(probe_lock(checked_local_path(lock)) == 'LOCKED' for lock in locks):
+        artifact.update(eligible=False, reason='RUNNER_OR_MANAGEMENT_ACTIVE')
+    for state in states - {record['base']['state']}:
+        path = checked_local_path(state / 'queue.sqlite3')
+        if path.exists():
+            with contextlib.closing(readonly_database(path)) as db:
+                if db.execute("SELECT 1 FROM tasks WHERE state IN ('QUEUED','RUNNING','ROLE_QUEUED','ROLE_RUNNING','PLAN_QUEUED','PLAN_RUNNING','SUMMARY_QUEUED','SUMMARY_RUNNING') LIMIT 1").fetchone():
+                    artifact.update(eligible=False, reason='FLOW_ACTIVE_OR_INCOMPLETE')
+    queue_path = checked_local_path(record['queue'] / 'queue.sqlite3')
+    with contextlib.closing(readonly_database(queue_path)) as db:
+        if db.execute("SELECT 1 FROM sqlite_master WHERE name='artifact_cleanup'").fetchone():
+            saved = db.execute('SELECT state FROM artifact_cleanup WHERE id=?', (task,)).fetchone()
+            artifact['cleanup_state'] = saved[0] if saved else None
+    if artifact['reason'] == 'ARTIFACTS_MISSING' and artifact.get('cleanup_state') == 'DELETED':
+        artifact['reason'] = 'ALREADY_DELETED'
+    report = dict(flow=flow, role=role, task=task, days=days, cutoff=cutoff, artifact=artifact,
+                  workspace=str(record['home']), queue_mode='SHARED_PARENT' if record['shared'] else 'PRIVATE',
+                  archive=archive, apply=False, read_only=True)
+    if freeze and artifact['eligible']:
+        report['guard'] = role_copy_guard(record, flow)
+    artifact.pop('error', None)
+    return report
+
+
+def prune(project, flow, role, task, days=30, apply=False, *, expected=None, cutoff=None):
     if type(days) is not int or not 1 <= days <= 3650:
         raise ValueError('days must be 1..3650')
     with locked(project, flow, role, task) as record:
         lock = safe(record['project'], (record['config']['state'] / 'promotion.lock').relative_to(record['project']).as_posix())
         with FileLock(lock):
-            cutoff = time.time() - days * 86400
+            cutoff = time.time() - days * 86400 if cutoff is None else cutoff
             item = candidate(record['config'], record['row'], cutoff)
+            if expected is not None and (not apply or not item['eligible'] or role_copy_guard(record, flow) != expected):
+                raise ValueError('Role artifacts changed after cleanup preview')
             if apply and item['eligible']:
                 # Re-read identity and eligibility immediately before deletion.
                 fresh = resolve(project, flow, role)
@@ -138,22 +203,15 @@ def prune(project, flow, role, task, days=30, apply=False):
                 if fresh['active_roles'] or fresh['saved'].get('state') not in FINISHED_PHASES:
                     raise ValueError('Flow became active before deletion')
                 item = candidate(fresh['config'], fresh['row'], cutoff)
+                if expected is not None and role_copy_guard(fresh, flow) != expected:
+                    raise ValueError('Role artifacts changed before deletion')
                 if item['eligible']:
                     home = Path(item['path'])
                     if home != record['home'] or not home.is_relative_to(record['project'] / '.role-flows' / flow):
                         raise ValueError('Unexpected deletion path')
                     # Only the actual owning queue is opened for writes.
                     store = Store(record['queue'])
-                    store.mark_artifacts(task, 'DELETING')
-                    try:
-                        preserve_before_prune(store, fresh['row'], home)
-                        shutil.rmtree(home)
-                    except (OSError, ValueError, TypeError) as exc:
-                        store.mark_artifacts(task, 'DELETE_FAILED')
-                        item.update(reason='DELETE_FAILED', error=str(exc))
-                    else:
-                        store.mark_artifacts(task, 'DELETED')
-                        item.update(reason='DELETED', deleted=True)
+                    delete_artifacts(store, fresh['row'], home, item, preserve=preserve_before_prune)
             return dict(flow=flow, role=role, task=task, apply=apply, days=days, artifact=item)
 
 

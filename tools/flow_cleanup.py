@@ -91,6 +91,8 @@ def preview(project, flow_id, days=30, *, now=None, _held_locks=(), _inventory=N
     project = Path(project).resolve()
     base_data = object_json(safe(project, 'bridge.json'))
     base = load_config(project/'bridge.json', data=base_data)
+    from agent_bridge.records_flow import require
+    require(base,flow_id,write=True)
     if base['root'] != project:
         raise ValueError('Requires configured project root')
     if Path.cwd().resolve().is_relative_to(project / '.role-flows') or Path.cwd().resolve().is_relative_to(base['state'] / 'workspaces'):

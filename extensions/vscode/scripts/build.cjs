@@ -3,9 +3,17 @@ const fs = require("node:fs");
 const path = require("node:path");
 const root = path.resolve(__dirname, "..");
 process.chdir(root);
+const symbol = path.resolve(root, "../../symbol.png");
+const packagedSymbol = path.join(root, "media/symbol.png");
+if (fs.existsSync(symbol)) fs.copyFileSync(symbol, packagedSymbol);
+if (!fs.existsSync(packagedSymbol)) throw new Error("The distribution icon media/symbol.png is missing.");
 require("./patch-nodepty.cjs");
 fs.mkdirSync("dist", { recursive: true });
-fs.cpSync(path.resolve(root, "../../src/agent_bridge"), path.join(root, "core/agent_bridge"), { recursive: true, filter: source => !source.includes("__pycache__") && !source.endsWith(".pyc") });
+const coreParent = path.join(root, "core"), coreDirectory = path.join(coreParent, "agent_bridge");
+if (path.relative(root, coreDirectory) !== path.join("core", "agent_bridge") ||
+    [coreParent, coreDirectory].some(directory => fs.existsSync(directory) && fs.lstatSync(directory).isSymbolicLink())) throw new Error("Unsafe generated core path.");
+fs.rmSync(coreDirectory, { recursive: true, force: true });
+fs.cpSync(path.resolve(root, "../../src/agent_bridge"), coreDirectory, { recursive: true, filter: source => !source.includes("__pycache__") && !source.endsWith(".pyc") });
 const helperAssets = ["role_flow", "role_review", "role_manage", "project_overview", "flow_lifecycle", "flow_cleanup", "flow_archive", "flow_archive_writer"];
 const helpers = path.join(root, "core/agent_bridge/_connect_assets/tools");
 fs.mkdirSync(helpers, { recursive: true });
@@ -18,7 +26,7 @@ fs.writeFileSync(path.join(root, "runtime-manifest.json"), JSON.stringify({ sche
 Promise.all([
   esbuild.build({ entryPoints: ["src/extension.ts"], bundle: true, outfile: "dist/extension.js", platform: "node", target: "node20", external: ["vscode", "node-pty"], sourcemap: false }),
   esbuild.build({ entryPoints: ["src/webview.ts"], bundle: true, outfile: "dist/webview.js", platform: "browser", target: "es2022", sourcemap: false }),
-  esbuild.build({ entryPoints: ["src/model.ts", "src/session.ts", "src/core.ts", "src/providerUsage.ts", "src/workflow.ts", "src/stateStore.ts"], bundle: true, outdir: "dist/test", platform: "node", target: "node20", external: ["node-pty"] })
+  esbuild.build({ entryPoints: ["src/model.ts", "src/session.ts", "src/core.ts", "src/providerUsage.ts", "src/workflow.ts", "src/stateStore.ts", "src/projectData.ts"], bundle: true, outdir: "dist/test", platform: "node", target: "node20", external: ["node-pty"] })
 ]).then(() => {
   fs.copyFileSync("node_modules/@xterm/xterm/css/xterm.css", "dist/xterm.css");
   const notices = ["@xterm/xterm", "@xterm/addon-fit", "@xterm/headless", "@xterm/addon-serialize", "node-pty"].map(name => {

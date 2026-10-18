@@ -73,7 +73,7 @@ test("real managed mock PTYs persist before delivery and stop on a database reco
     host.send(id, text);
   });
   host = new SessionHost(router, path.join(dir, "runtime"), root, ledger);
-  t.after(async () => { host.dispose(); await ledger.end(); await fs.rm(dir, { recursive: true, force: true }); });
+  t.after(async () => { await host.shutdown(); await ledger.end(); core.dispose(); await fs.rm(dir, { recursive: true, force: true }); });
   let codexOutput = ""; host.on("output", (id, data) => { if (id === "b") codexOutput += data; });
   for (const node of board.nodes) await host.start(node, { id: node.id, name: node.name, provider: node.provider, command: process.execPath, args: [path.join(__dirname, "fake-ai.cjs"), "--provider", node.provider], shell: "direct" });
   await wait(() => router.runtime.get("a")?.phase === "ready" && codexOutput.includes("PATCHPORT_FIXTURE"));

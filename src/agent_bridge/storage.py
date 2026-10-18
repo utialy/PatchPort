@@ -28,6 +28,11 @@ def identifier(value):
         raise ValueError("Invalid identifier")
     return value
 
+
+def path_identity(path):
+    """Compare already selected paths using the platform's path case rules."""
+    return os.path.normcase(os.path.normpath(str(path)))
+
 def sync_directory(path):
     """Flush directory entries on POSIX; Windows has no portable directory fsync."""
     if os.name != 'nt':
@@ -131,6 +136,36 @@ def remove_owned_launcher(path, expected, root):
     sync_directory(path.parent)
 
 
+def relocate_owned_directory(source, target, root, expected):
+    """Move one verified artifact tree inside its selected state, without copying it."""
+    root = checked_local_path(root)
+    source, target = checked_local_path(source, root), checked_local_path(target, root)
+    if source == root or target == root or target.exists():
+        raise ValueError('Invalid artifact relocation')
+    info = source.stat()
+    if not stat.S_ISDIR(info.st_mode) or [info.st_dev, info.st_ino] != expected:
+        raise ValueError('Artifact identity changed')
+    target.parent.mkdir(parents=True, exist_ok=True)
+    checked_local_path(target, root)
+    source.rename(target)
+    sync_directory(source.parent); sync_directory(target.parent)
+
+
+def remove_empty_owned_directory(path, root, expected):
+    """Remove an empty verified directory; never recurse through new entries."""
+    root = checked_local_path(root)
+    path = checked_local_path(path, root)
+    if path == root:
+        raise ValueError('Cannot remove the state root')
+    if not path.exists():
+        return
+    info = path.stat()
+    if not stat.S_ISDIR(info.st_mode) or [info.st_dev, info.st_ino] != expected:
+        raise ValueError('Artifact directory changed')
+    path.rmdir()
+    sync_directory(path.parent)
+
+
 @contextlib.contextmanager
 def guarded_removal(root, entries):
     """Pin every Windows deletion candidate exclusively before deleting any file."""
@@ -227,11 +262,23 @@ def load_config(path, *, data=None):
     return c
 
 class Store:
-    def __init__(self, state):
+    def __init__(self, state, *, config=None, writer=None):
         self.state = Path(state)
+        self.config, self.writer = config, writer
         self.state.mkdir(parents=True, exist_ok=True)
         self.db = self.state / "queue.sqlite3"
         with self.connect() as db:
+            from . import records_guard
+            self.protected = bool(records_guard.meta(db))
+            if self.protected:
+                if config is not None:
+                    saved = records_guard.meta(db)
+                    if path_identity(saved['project']) != path_identity(config['root']) or path_identity(saved['config']) != path_identity(config['config_path']):
+                        raise records_guard.RecordsError('RECORDS_PROJECT_MISMATCH')
+                return
+            self.create_tables(db)
+    @staticmethod
+    def create_tables(db):
             db.execute("CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, batch TEXT, endpoint TEXT, prompt TEXT, state TEXT, created REAL, started REAL, finished REAL, result TEXT)")
             db.execute("CREATE TABLE IF NOT EXISTS control (id INTEGER PRIMARY KEY CHECK(id=1), paused INTEGER NOT NULL, max_calls INTEGER, calls_started INTEGER NOT NULL)")
             db.execute("INSERT OR IGNORE INTO control SELECT 1,0,NULL,COUNT(*) FROM tasks WHERE started IS NOT NULL")
@@ -240,12 +287,15 @@ class Store:
             db.execute("CREATE TABLE IF NOT EXISTS context_plans (id TEXT PRIMARY KEY, data TEXT NOT NULL)")
             db.execute("CREATE TABLE IF NOT EXISTS role_tasks (id TEXT PRIMARY KEY, flow TEXT NOT NULL, role TEXT NOT NULL, data TEXT NOT NULL, UNIQUE(flow,role))")
             db.execute("CREATE TABLE IF NOT EXISTS runner_lifecycle (id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL)")
-    def connect(self):
-        db = sqlite3.connect(self.db, timeout=15)
-        db.row_factory = sqlite3.Row
-        db.execute("PRAGMA synchronous=FULL")
-        return Transaction(db)
-    def submit(self, batch, targets, prompt, endpoints, context_plan=None, *, role=None):
+    def connect(self, actor='@runtime'):
+        from . import records_guard
+        transaction = records_guard.connect(self.state, self.writer, actor)
+        saved = records_guard.meta(transaction.db)
+        if saved and self.config is not None and (path_identity(saved['project']) != path_identity(self.config['root']) or path_identity(saved['config']) != path_identity(self.config['config_path'])):
+            transaction.db.close()
+            raise records_guard.RecordsError('RECORDS_PROJECT_MISMATCH')
+        return transaction
+    def submit(self, batch, targets, prompt, endpoints, context_plan=None, *, role=None, flow_writer=None):
         identifier(batch)
         if not prompt.strip() or len(prompt.encode()) > 1_000_000:
             raise ValueError("Prompt must be nonempty and <=1 MB")
@@ -263,9 +313,33 @@ class Store:
             if len(targets) != 1 or role['role'] not in ('developer', 'reviewer') or targets != [role['role']] or plan_json is None:
                 raise ValueError('Role submission requires one role and a frozen context plan')
             role_json = json.dumps(role, ensure_ascii=False, allow_nan=False)
-        with self.connect() as db:
+        with self.connect('@submit') as db:
             db.execute("BEGIN IMMEDIATE")
+            from . import records_guard
+            if records_guard.meta(db):
+                if self.config is not None:
+                    from .connection_guard import require_project
+                    require_project(self.config['root'])
+                if records_guard.meta(db)['version']==3:
+                    raise records_guard.RecordsError('CONNECTION_REMOVED')
+                if role is not None:
+                    if records_guard.meta(db)['version']!=2:
+                        raise records_guard.RecordsError('ROLE_QUEUE_UPGRADE_REQUIRED')
+                    if flow_writer is None or flow_writer.flow!=role['flow']:
+                        raise records_guard.RecordsError('FLOW_WRITER_REQUIRED')
+                    flow_writer.check(db)
+                if self.config is None:
+                    raise records_guard.RecordsError('RECORDS_PROJECT_REQUIRED')
+                records_guard.check_input_scope(self.config)
+                for summary in (context_plan or {}).get('payload', {}).get('summaries', []):
+                    source = summary.get('record', {}).get('provenance', {}).get('source_task_id')
+                    if source:
+                        item = db.execute('SELECT body_state FROM records_tasks WHERE task=?',(source,)).fetchone()
+                        if item and item[0] != 'NORMAL':
+                            raise records_guard.RecordsError('BODY_DELETED')
             for id_, target in zip(ids, targets):
+                if records_guard.meta(db):
+                    db.execute("INSERT INTO records_tasks VALUES (?,?,?,NULL,'NORMAL',NULL)",(id_,str(self.config['root']),str(self.config['config_path'])))
                 db.execute("INSERT INTO tasks VALUES (?,?,?,?,?,?,?,?,?)", (id_, batch, target, prompt, "ROLE_QUEUED" if role is not None else "SUMMARY_QUEUED" if summary_plan else "PLAN_QUEUED" if plan_json else "QUEUED", time.time(), None, None, None))
                 if plan_json:
                     db.execute("INSERT INTO context_plans VALUES (?,?)", (id_, plan_json))
@@ -281,6 +355,8 @@ class Store:
             sql = "SELECT * FROM tasks" + (" WHERE batch=?" if batch else "") + " ORDER BY created,id"
             rows = [dict(r) for r in db.execute(sql, (batch,) if batch else ())]
             for row in rows:
+                from .records_guard import decorate
+                decorate(db,row)
                 if row["state"] in ("ROLE_QUEUED", "ROLE_RUNNING"):
                     row['role_task_required'] = True
                 if row["state"] in ("PLAN_QUEUED", "PLAN_RUNNING", "ROLE_QUEUED", "ROLE_RUNNING", "SUMMARY_QUEUED", "SUMMARY_RUNNING"):
@@ -305,6 +381,9 @@ class Store:
 
     def register_runner(self, record):
         # Caller holds runner.lock for the complete registered lifetime.
+        if self.protected and self.writer is None:
+            from .records_guard import RecordsError
+            raise RecordsError('RECORDS_WRITER_REQUIRED')
         with self.connect() as db:
             db.execute("INSERT OR REPLACE INTO runner_lifecycle VALUES (1,?)", (json.dumps(record),))
 
@@ -342,6 +421,8 @@ class Store:
                 return False
             claimed = db.execute("UPDATE tasks SET state=CASE state WHEN 'PLAN_QUEUED' THEN 'PLAN_RUNNING' WHEN 'ROLE_QUEUED' THEN 'ROLE_RUNNING' WHEN 'SUMMARY_QUEUED' THEN 'SUMMARY_RUNNING' ELSE 'RUNNING' END,started=? WHERE id=? AND state IN ('QUEUED','PLAN_QUEUED','ROLE_QUEUED','SUMMARY_QUEUED')", (time.time(), id_)).rowcount == 1
             if claimed:
+                if self.protected:
+                    db.execute('UPDATE records_tasks SET writer=? WHERE task=?',(self.writer.identity(),id_))
                 db.execute("UPDATE control SET calls_started=calls_started+1 WHERE id=1")
             return claimed
     def control(self):
@@ -361,6 +442,11 @@ class Store:
             db.execute("UPDATE control SET max_calls=? WHERE id=1", (max_calls,))
     def finish(self, id_, status, result):
         with self.connect() as db:
+            if self.protected:
+                if self.writer is None:
+                    from .records_guard import RecordsError
+                    raise RecordsError('RECORDS_WRITER_REQUIRED')
+                db.execute('UPDATE records_tasks SET writer=? WHERE task=?',(self.writer.identity(),id_))
             db.execute("UPDATE tasks SET state=?,finished=?,result=? WHERE id=?", (status, time.time(), json.dumps(result, ensure_ascii=False), id_))
     def mark_artifacts(self, id_, state):
         with self.connect() as db:

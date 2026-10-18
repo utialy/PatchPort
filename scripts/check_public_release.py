@@ -1,5 +1,6 @@
 """Check public repository content and commit messages without modifying files."""
 import argparse
+import hashlib
 import os
 from pathlib import Path, PurePosixPath
 import posixpath
@@ -10,7 +11,7 @@ import zlib
 
 ROOT_FILES = {'.gitignore', '.gitattributes', 'README.md', 'AGENTS.md', 'CLAUDE.md',
               'CONTRIBUTING.md', 'LICENSE', 'pyproject.toml', 'MANIFEST.in', 'CHANGELOG.md', 'setup.py'}
-ROOT_DIRS = {'src', 'tests', 'tools', 'scripts', 'skills', 'examples', 'docs', '.github', '.githooks', 'extensions', 'desktop', 'packaging'}
+ROOT_DIRS = {'src', 'tests', 'tools', 'scripts', 'skills', 'examples', 'docs', '.github', '.githooks', 'extensions'}
 EXCLUDED = {'.git', '.venv', '__pycache__', '.bridge', '.agent-bridge', '.role-flows',
             '.bridge-requests', '.bridge-integration-backups', 'workspaces', 'build', 'dist', 'node_modules'}
 REQUIRED = {'README.md', 'LICENSE', 'pyproject.toml', 'AGENTS.md', 'CONTRIBUTING.md',
@@ -23,7 +24,7 @@ TOKENS = [re.compile(rb'-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----'),
 LOCAL_PATH = re.compile(r'(?:[A-Za-z]:[/\\](?:Users|!Projects)[/\\]|/(?:home|Users)/[A-Za-z0-9_.-]+/)', re.I)
 
 
-def check_png(data):
+def check_png(data, *, icon=False):
     """Accept bounded screenshots without text or EXIF metadata."""
     if len(data) > 5 * 1024 * 1024 or not data.startswith(b'\x89PNG\r\n\x1a\n'):
         return ['screenshot must be a PNG of at most 5 MiB']
@@ -33,7 +34,10 @@ def check_png(data):
             length = struct.unpack_from('>I', data, offset)[0]
             kind = data[offset + 4:offset + 8]
             end = offset + 12 + length
-            if end > len(data) or kind not in (b'IHDR', b'IDAT', b'IEND', b'sRGB', b'gAMA', b'pHYs', b'cHRM'):
+            allowed = (b'IHDR', b'IDAT', b'IEND', b'sRGB', b'gAMA', b'pHYs', b'cHRM')
+            # Preserve C2PA provenance only for the explicitly reviewed icon bytes.
+            reviewed_icon = icon and hashlib.sha256(data).hexdigest() == 'c0ca1011192f4ce832d333c6530ebf4d17917c1632205f658a7d89691273b031'
+            if end > len(data) or kind not in allowed and not (reviewed_icon and kind == b'caBX'):
                 return ['invalid PNG chunk or unreviewed screenshot metadata']
             if zlib.crc32(data[offset + 4:end - 4]) & 0xffffffff != struct.unpack_from('>I', data, end - 4)[0]:
                 return ['PNG checksum mismatch']
@@ -57,13 +61,15 @@ def check_content(name, data):
             or (len(path.parts) == 1 and name not in ROOT_FILES)
             or (len(path.parts) > 1 and path.parts[0] not in ROOT_DIRS)):
         errors.append('path is outside the public file layout')
+    if name.startswith(('desktop/', 'packaging/')) or name in ('src/agent_bridge/install_manager.py', 'src/agent_bridge/posix_install.py'):
+        errors.append('standalone desktop/installer code is outside the extension distribution')
     if (any(p in EXCLUDED or p.endswith('.egg-info') for p in path.parts)
             or name.startswith('extensions/vscode/core/') or name == 'extensions/vscode/runtime-manifest.json'
             or path.name.startswith(('.env', 'HANDOFF')) or path.name == 'NEXT_SESSION.md'
             or path.suffix in {'.pyc', '.pyo', '.pyd', '.db', '.sqlite3', '.log'}):
         errors.append('private or generated file is not allowed')
-    if re.fullmatch(r'docs/images/[a-z0-9-]+\.png', name):
-        return errors + check_png(data)
+    if re.fullmatch(r'docs/images/[a-z0-9-]+\.png', name) or name == 'extensions/vscode/media/symbol.png':
+        return errors + check_png(data, icon=name == 'extensions/vscode/media/symbol.png')
     if name.endswith(('/.gitignore', '/.vscodeignore', '/LICENSE')):
         pass
     elif name not in ROOT_FILES and path.parts and path.parts[0] != '.githooks' and path.suffix not in TEXT_SUFFIXES:

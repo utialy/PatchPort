@@ -55,6 +55,8 @@ def plan_install(project, python=None, config_template=None, roles_template=None
                  *, config_data=None, initial_files=None, create_project=False):
     ROOT = asset_root()
     project = project_path(project)
+    from .connection_guard import require_project
+    require_project(project,connection=True)
     project_exists = project.is_dir()
     if not project_exists and (not create_project or project.exists() or not project.parent.is_dir()):
         raise ValueError('Select an existing project, or explicitly create one under an existing parent')
@@ -193,15 +195,24 @@ def reconnect_guard(plan):
 def install(plan, apply=False, *, before_write=None):
     if not apply or not plan['ok']:
         return _install(plan, apply, before_write=before_write)
-    with reconnect_guard(plan):
-        return _install(plan, apply, before_write=before_write)
+    from .connection_guard import gate, require_project
+    for name,expected in plan.get('guards',{}).items():
+        if workspace.digest(workspace.safe(plan['project'],name))!=expected:
+            raise ValueError('Configuration or manifest changed after preview: '+name)
+    for item in plan['actions']:
+        if workspace.digest(workspace.safe(plan['project'],item['path']))!=item['before']:
+            raise ValueError('Destination changed after preview: '+item['path'])
+    with FileLock(gate(plan['project'])) if plan.get('project_exists',True) else contextlib.nullcontext():
+        require_project(plan['project'],connection=True)
+        with reconnect_guard(plan):
+            return _install(plan, apply, before_write=before_write)
 
 
 def _install(plan, apply=False, *, before_write=None):
     report=dict(project=str(plan['project']),python=str(plan['python']),apply=apply,ok=plan['ok'],roles_configured=plan['roles'],actions=plan['actions'],runner_started=False,ai_calls=0)
     if not apply or not plan['ok']: return report
     env=dict(os.environ);env.pop('PYTHONPATH',None)
-    checked=subprocess.run([str(plan['python']),'-c','import agent_bridge; from agent_bridge.storage import probe_lock, readonly_database, durable_write, sync_directory; from agent_bridge.role_policy import readonly; print(agent_bridge.__version__)'],env=env,stdin=subprocess.DEVNULL,capture_output=True,timeout=15)
+    checked=subprocess.run([str(plan['python']),'-c','import agent_bridge; from agent_bridge.storage import probe_lock, readonly_database, durable_write, sync_directory; from agent_bridge.cleanup import copy_guard, delete_artifacts; from agent_bridge.records_guard import reject_roles; from agent_bridge.records_flow import scope, require; from agent_bridge.role_policy import readonly; print(agent_bridge.__version__)'],env=env,stdin=subprocess.DEVNULL,capture_output=True,timeout=15)
     if checked.returncode:raise ValueError('Selected Python needs the current agent_bridge runtime with connection and role policy support; install the updated package first')
     if before_write is not None: before_write()
     project=plan['project']

@@ -186,6 +186,8 @@ def continue_archive(project, flow_id, operation, plan_hash=None, *, apply=False
     identifier(operation)
     project = Path(project).resolve()
     flow = safe(project, '.role-flows/' + flow_id)
+    from agent_bridge.records_flow import require
+    require(load_config(project/'bridge.json'),flow_id,write=True)
     journal_path = safe(flow, 'cleanup.json')
     journal = flow_archive._json(flow_archive._read(flow, 'cleanup.json'))
     if (journal.get('mode') != 'ARCHIVE_ONLY' or journal.get('flow') != flow_id

@@ -9,11 +9,13 @@ import sys
 import threading
 import time
 
-from . import child, context, runner_manager, setup_project, workspace
+from . import child, cleanup, context, copies, runner_manager, setup_project, workspace
 from .storage import FileLock, Store, atomic_json, identifier, readonly_database
 
 ACTIONS = {
     'context.inventory': ({'config'}, {'prompt'}),
+    'copies.list': ({'config'}, {'kind', 'days', 'cursor', 'limit'}),
+    'copies.prune.preview': ({'config', 'ids', 'days'}, set()),
     'batch.preview': ({'config', 'batch_id', 'targets', 'prompt', 'plan'}, set()),
     'proposal.inspect': ({'config', 'task_id'}, {'path'}),
     'proposal.preview': ({'config', 'task_id', 'paths'}, set()),
@@ -30,7 +32,7 @@ ACTIONS = {
     'operation.apply': ({'plan_id', 'apply'}, set()),
     'operation.cancel': ({'plan_id'}, set()),
 }
-HELPERS = {'role_flow', 'role_review', 'role_manage', 'project_overview', 'flow_cleanup', 'flow_archive_writer'}
+HELPERS = {'role_flow', 'role_review', 'role_manage', 'project_overview', 'flow_cleanup', 'flow_archive_writer', 'flow_archive', 'flow_lifecycle'}
 
 
 def helper(name):
@@ -61,6 +63,13 @@ def validate(action, args):
     for key in ('batch_id', 'flow_id', 'backup', 'operation'):
         if key in args:
             identifier(args[key])
+    if 'ids' in args:
+        if not isinstance(args['ids'], list) or not 1 <= len(args['ids']) <= 25:
+            raise ValueError('Select 1..25 task IDs')
+        for value in args['ids']:
+            identifier(value)
+        if len(set(args['ids'])) != len(args['ids']):
+            raise ValueError('Select unique task IDs')
     if 'role' in args and args['role'] not in ('developer', 'reviewer'):
         raise ValueError('Invalid role')
     if 'days' in args and (type(args['days']) is not int or not 1 <= args['days'] <= 3650):
@@ -72,11 +81,9 @@ def save_plan(session, action, args, config, report, **extra):
     if len(session.plans) >= MAX_PLANS:
         fail('PLAN_CAPACITY', 'Cancel an unused plan or preview after expiry')
     plan_id = secrets.token_urlsafe(32)
-    if action in ('roles.promote.preview', 'roles.recover.preview', 'roles.prune.preview'):
+    if action in ('roles.promote.preview', 'roles.recover.preview'):
         record = helper('role_review').resolve(config['root'], args['flow_id'], args['role'])
         report['workspace'] = str(record['home'])
-        if action == 'roles.prune.preview':
-            extra['prune_snapshot'] = workspace.files(record['home'])
     payload = dict(p1=True, action=action, args=copy.deepcopy(args), config=copy.deepcopy(config),
                    report=copy.deepcopy(report), **extra)
     session.plans[plan_id] = (time.monotonic() + PLAN_SECONDS, payload)
@@ -85,6 +92,8 @@ def save_plan(session, action, args, config, report, **extra):
 
 def task_record(config, task_id):
     identifier(task_id)
+    from .records_guard import require_artifacts
+    require_artifacts(config, task_id, live=False)
     db = readonly_database(config['state'] / 'queue.sqlite3')
     try:
         row = db.execute('SELECT state,result FROM tasks WHERE id=?', (task_id,)).fetchone()
@@ -168,7 +177,12 @@ def role_config(config):
         raise ValueError('Role workflows require project bridge.json')
 
 
-def role_start_report(config, args):
+def role_start_report(config, args, *, accepted=False):
+    from .records_guard import reject_roles
+    reject_roles(config)
+    if not accepted:
+        from .records_flow import ensure_new
+        ensure_new(config,args['flow_id'])
     role_config(config)
     setup_project.selected_snapshot(config['root'], config['include'])
     project = config['root']
@@ -200,6 +214,8 @@ def start_role(config, args, expected):
     root = workspace.safe(config['state'], 'p1-jobs')
     root.mkdir(parents=True, exist_ok=True)
     flow_id = args['flow_id']
+    from .records_flow import reserve
+    flow_owner=reserve(config,flow_id)
     receipt = workspace.safe(root, flow_id + '.json')
     with FileLock(root / 'start.lock'):
         if receipt.exists():
@@ -208,7 +224,7 @@ def start_role(config, args, expected):
         with prompt.open('x', encoding='utf-8') as stream:
             stream.write(args['prompt'])
         ticket = dict(flow=flow_id, state='STARTING', max_provider_calls=2, created=time.time(),
-                      expected=expected, config=str(config['config_path']), launch_nonce=secrets.token_urlsafe(32))
+                      expected=expected, config=str(config['config_path']), launch_nonce=secrets.token_urlsafe(32), flow_owner=flow_owner)
         atomic_json(receipt, ticket)
         helper('role_flow')
         with child.external_environment() as env:
@@ -236,6 +252,15 @@ def dispatch(session, action, args):
             raise ValueError('Config changed; preview again')
         return apply_plan(config, payload)
     config = runner_manager.checked_config(args['config'])
+    if action == 'copies.list':
+        return copies.listing(config, args.get('kind', 'batch'), args.get('days', 30), args.get('cursor', ''), args.get('limit', 25))
+    if action == 'copies.prune.preview':
+        report = cleanup.observe_batch(config, args['days'], args['ids'], freeze=True)
+        report.update(operation='copy_cleanup', preserves=['tasks', 'answers', 'usage', 'control', 'original_project'])
+        if not report['eligible']:
+            return dict(plan_id=None, report=report)
+        return save_plan(session, action, args, config, report,
+                         copy_guards={item['task_id']: item['guard'] for item in report['items']})
     if action == 'context.inventory':
         setup_project.selected_snapshot(config['root'], config['include'])
         report = context.preview(config, args.get('prompt', ''))
@@ -253,6 +278,9 @@ def dispatch(session, action, args):
                          dict(batch=args['batch_id'], targets=args['targets'], context=inventory, starts_runner=False), saved=saved)
     if action == 'proposal.inspect':
         return proposal(config, args['task_id'], relative=args.get('path'))
+    if action in ('proposal.preview','recovery.preview'):
+        from .records_guard import require_artifacts
+        require_artifacts(config,args['task_id'],write=True,live=False)
     if action == 'proposal.preview':
         report = proposal(config, args['task_id'], args['paths'])
     elif action == 'recovery.preview':
@@ -296,7 +324,8 @@ def dispatch(session, action, args):
         elif action == 'roles.recover.preview':
             report = helper('role_manage').recover(project, args['flow_id'], args['role'], args['task_id'], args['backup'])
         elif action == 'roles.prune.preview':
-            report = helper('role_manage').prune(project, args['flow_id'], args['role'], args['task_id'], args['days'])
+            report = helper('role_manage').preview_prune(project, args['flow_id'], args['role'], args['task_id'], args['days'])
+            report['operation'] = 'copy_cleanup'
             if not report['artifact']['eligible']:
                 return dict(plan_id=None, report=report)
         elif action == 'archive.preview':
@@ -312,11 +341,16 @@ def dispatch(session, action, args):
 
 def apply_plan(config, payload):
     action, args, report = (payload[k] for k in ('action', 'args', 'report'))
+    if action == 'copies.prune.preview':
+        result = cleanup.prune(config, args['days'], args['ids'], True,
+                               expected=payload['copy_guards'], cutoff=report['cutoff'])
+        result.update(operation='copy_cleanup', kind='batch', ok=all(item['deleted'] for item in result['tasks']))
+        return result
     if action == 'batch.preview':
         setup_project.selected_snapshot(config['root'], config['include'])
         for target in args['targets']:
             context.check_plan(config, args['prompt'], payload['saved'], target)
-        tasks = Store(config['state']).submit(args['batch_id'], args['targets'], args['prompt'], config['endpoints'], payload['saved'])
+        tasks = Store(config['state'], config=config).submit(args['batch_id'], args['targets'], args['prompt'], config['endpoints'], payload['saved'])
         return dict(tasks=tasks, batch=args['batch_id'], submitted=True, starts_runner=False)
     if action == 'proposal.preview':
         if proposal(config, args['task_id'], args['paths']) != report:
@@ -345,10 +379,10 @@ def apply_plan(config, payload):
             raise ValueError('Role recovery changed')
         return helper('role_manage').recover(project, args['flow_id'], args['role'], args['task_id'], args['backup'], True)
     if action == 'roles.prune.preview':
-        record = helper('role_review').resolve(project, args['flow_id'], args['role'])
-        if workspace.files(record['home']) != payload['prune_snapshot']:
-            raise ValueError('Role artifacts changed after cleanup preview')
-        return helper('role_manage').prune(project, args['flow_id'], args['role'], args['task_id'], args['days'], True)
+        result = helper('role_manage').prune(project, args['flow_id'], args['role'], args['task_id'], args['days'], True,
+                                               expected=report['guard'], cutoff=report['cutoff'])
+        result.update(operation='copy_cleanup', kind='role', archive=report['archive'], ok=result['artifact']['deleted'] is True)
+        return result
     if action == 'archive.preview':
         return helper('flow_archive_writer').write_archive(project, args['flow_id'], report['plan_hash'], args['days'])
     if action == 'archive.resume.preview':

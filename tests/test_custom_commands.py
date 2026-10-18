@@ -15,7 +15,6 @@ from agent_bridge import child, management, setup_project as setup
 from agent_bridge.cli import main
 from agent_bridge.runner import argv_for, run
 from agent_bridge.storage import Store, atomic_json, load_config
-from desktop.model import response_text, status_text
 
 
 class CommandFixture(unittest.TestCase):
@@ -68,10 +67,6 @@ class CustomCommandTests(CommandFixture):
         self.assertEqual(check['command_status'], 'NOT_CHECKED')
         self.assertEqual(check['profile_status'], 'NOT_LOADED')
         self.assertFalse((self.project / 'bridge.json').exists())
-        preview = response_text(dict(ok=True, result=plan['report']))
-        self.assertIn('claude-1', preview)
-        self.assertIn('not loaded', preview)
-        self.assertIn('NOT CHECKED', status_text(dict(diagnostics=plan['report']['diagnostics'])))
         profile.unlink()
         with self.assertRaisesRegex(ValueError, 'CLI resolution changed'):
             setup.apply_setup(plan)

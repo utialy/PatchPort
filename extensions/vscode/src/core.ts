@@ -12,6 +12,10 @@ export class CoreClient {
   private idle?: NodeJS.Timeout;
   private pending?: { id: string; resolve(value: unknown): void; reject(error: Error): void; timer: NodeJS.Timeout };
   private plans = new Set<string>();
+  private holds = new Set<string>();
+  epoch = 0;
+  retain(id: string): void { this.holds.add(id); if (this.idle) clearTimeout(this.idle); }
+  release(id: string): void { this.holds.delete(id); this.scheduleIdle(); }
   constructor(readonly python: string, readonly source: string) {}
   request(action: string, args: Record<string, unknown> = {}): Promise<any> {
     const next = this.chain.then(() => this.exchange(action, args));
@@ -22,10 +26,10 @@ export class CoreClient {
     const env = { ...process.env, PYTHONPATH: this.source, PYTHONIOENCODING: "utf-8", PYTHONDONTWRITEBYTECODE: "1" };
     delete (env as NodeJS.ProcessEnv).PYTHONHOME;
     const child = spawn(this.python, ["-B", "-X", "utf8", "-m", "agent_bridge", "manage"], { env, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
-    this.child = child; this.buffer = "";
+    this.child = child; this.buffer = ""; this.epoch++;
     child.unref();
     for (const stream of [child.stdin, child.stdout, child.stderr]) (stream as unknown as { unref?: () => void }).unref?.();
-    const lost = (message: string) => { if (this.child !== child) return; this.child = undefined; this.plans.clear(); this.fail(new Error(message)); };
+    const lost = (message: string) => { if (this.child !== child) return; this.child = undefined; this.epoch++; this.plans.clear(); this.fail(new Error(message)); };
     child.on("error", () => lost("Check the Python 3.11+ executable in patchport.corePython."));
     child.on("exit", () => lost("Core connection ended. Preview again; mutations are never retried automatically."));
     child.stdin.on("error", () => lost("Core input disconnected. Inspect the outcome before making a new preview."));
@@ -52,8 +56,8 @@ export class CoreClient {
     return child;
   }
   private fail(error: Error): void { const pending = this.pending; this.pending = undefined; if (pending) { clearTimeout(pending.timer); pending.reject(error); } }
-  private scheduleIdle(): void { if (this.idle) clearTimeout(this.idle); this.idle = setTimeout(() => { if (!this.pending) this.close(); }, this.plans.size ? 600000 : 2000); this.idle.unref(); }
-  private close(): void { const child = this.child; this.child = undefined; this.plans.clear(); this.buffer = ""; if (this.idle) clearTimeout(this.idle); child?.stdin.end(); }
+  private scheduleIdle(): void { if (this.idle) clearTimeout(this.idle); if (this.holds.size) return; this.idle = setTimeout(() => { if (!this.pending) this.close(); }, this.plans.size ? 600000 : 2000); this.idle.unref(); }
+  private close(): void { const child = this.child; this.child = undefined; this.epoch++; this.plans.clear(); this.buffer = ""; if (this.idle) clearTimeout(this.idle); child?.stdin.end(); }
   dispose(): void { this.fail(new Error("Core connection closed. Inspect any unconfirmed mutation.")); this.close(); }
   private exchange(action: string, args: Record<string, unknown>): Promise<any> {
     const id = randomUUID();
@@ -62,7 +66,7 @@ export class CoreClient {
     return new Promise((resolve, reject) => {
       if (this.idle) clearTimeout(this.idle);
       const child = this.open();
-      if (typeof args.plan_id === "string" && ["operation.apply", "operation.cancel", "setup.apply", "setup.cancel"].includes(action)) this.plans.delete(args.plan_id);
+      if (typeof args.plan_id === "string" && ["operation.apply", "operation.cancel", "setup.apply", "setup.cancel", "history.apply", "history.cancel", "records.apply", "records.cancel", "connection.apply", "connection.cancel", "cleanup.apply", "cleanup.cancel"].includes(action)) this.plans.delete(args.plan_id);
       const timer = setTimeout(() => { this.fail(new Error("Core response unconfirmed. Inspect results, backups and archives; do not retry automatically.")); this.close(); }, 45000);
       this.pending = { id, resolve, reject, timer };
       child.stdin.write(encoded);
@@ -70,15 +74,26 @@ export class CoreClient {
   }
 }
 
-export interface Binding { project: string; config: string; database: string; linked: boolean; endpoints: Record<string, any>; context_budget?: unknown; control?: any }
+export interface Binding { project: string; config: string; state?: string; database: string; linked: boolean; endpoints: Record<string, any>; context_budget?: unknown; control?: any }
 export class Ledger {
   readonly owner = randomUUID();
-  readonly sessions = new Map<string, { id: string; database: string; project: string }>();
+  readonly sessions = new Map<string, { id: string; database: string; project: string; owner: string }>();
+  private owners = new Map<string, { id: string; database: string; project: string; epoch: number }>();
+  private associations = new Map<string, { database: string; project: string; owner: string; source_session: string; target_session: string }>();
   private chain: Promise<unknown> = Promise.resolve();
   private bindings = new Map<string, Binding>();
   private databases = new Set<string>();
+  private pending = 0;
   constructor(readonly core: CoreClient, readonly storage: string, readonly changed: () => void = () => {}) {}
-  private serial<T>(work: () => Promise<T>): Promise<T> { const next = this.chain.then(work); this.chain = next.catch(() => {}); return next; }
+  private serial<T>(work: () => Promise<T>): Promise<T> { this.pending++; const next = this.chain.then(work).finally(() => this.pending--); this.chain = next.catch(() => {}); return next; }
+  isBusy(project: string): boolean { return this.pending > 0 || [...this.sessions.values()].some(s => projectKey(s.project) === projectKey(project)); }
+  forget(project: string): void { if (this.isBusy(project)) throw new Error("Finish recording session shutdown before trying again."); this.bindings.delete(projectKey(project)); }
+  async candidates(project: string): Promise<string[]> {
+    const values = [projectKey(project), project, await fs.realpath(project)];
+    const paths = values.map(value => path.join(this.storage, createHash("sha256").update(value).digest("hex").slice(0, 24), "interactive.sqlite3"));
+    const bound = this.binding(project)?.database; if (bound) paths.unshift(bound);
+    return [...new Map(paths.map(value => [projectKey(value), value])).values()];
+  }
   async inspect(project: string, config?: string): Promise<Binding> {
     const capabilities = await this.core.request("capabilities");
     const [major, minor] = String(capabilities.python).split(".").map(Number);
@@ -102,9 +117,19 @@ export class Ledger {
     const binding = this.binding(node.project) || await this.inspect(node.project);
     const id = randomUUID();
     await this.serial(async () => {
-      await this.core.request("interactive.initialize", { database: binding.database, apply: true });
-      await this.core.request("interactive.begin", { database: binding.database, apply: true, session_id: id, node: node.id, project: node.project, provider: node.provider, name: node.name, owner: this.owner });
-      this.sessions.set(node.id, { id, database: binding.database, project: node.project });
+      const key = projectKey(node.project);
+      let owner = this.owners.get(key);
+      if (!owner) {
+        const ownerId = randomUUID();
+        const opened = await this.core.request("interactive.owner.open", { database: binding.database, project: node.project, owner: ownerId, apply: true });
+        if (opened.writer_protocol !== 2) throw new Error("The current interactive writer protocol is required.");
+        owner = { id: ownerId, database: binding.database, project: node.project, epoch: this.core.epoch };
+        this.owners.set(key, owner); this.core.retain(ownerId);
+      }
+      this.checkOwner(node.project, owner.id);
+      try { await this.core.request("interactive.begin", { database: binding.database, apply: true, session_id: id, node: node.id, project: node.project, provider: node.provider, name: node.name, owner: owner.id }); }
+      catch (error) { if (![...this.sessions.values()].some(s => s.owner === owner!.id)) await this.closeOwner(node.project).catch(() => {}); throw error; }
+      this.sessions.set(node.id, { id, database: binding.database, project: node.project, owner: owner.id });
       this.databases.add(binding.database);
     });
     return id;
@@ -112,27 +137,47 @@ export class Ledger {
   record(node: string, kind: string, data: Record<string, unknown> = {}, turn?: string, eventId: string = randomUUID()): Promise<void> {
     const session = this.sessions.get(node); if (!session) return Promise.resolve();
     const identity = createHash("sha256").update(`${session.id}:${eventId}`).digest("hex");
-    return this.serial(async () => { await this.core.request("interactive.record", { database: session.database, session_id: session.id, event_id: identity, kind, data, ...(turn ? { turn } : {}), apply: true }); this.changed(); });
+    return this.serial(async () => { this.checkOwner(session.project, session.owner); await this.core.request("interactive.record", { database: session.database, owner: session.owner, session_id: session.id, event_id: identity, kind, data, ...(turn ? { turn } : {}), apply: true }); this.changed(); });
   }
   delivery(delivery: Delivery, project?: string): Promise<void> {
-    const session = this.sessions.get(delivery.target);
-    const database = session?.database || (project ? this.binding(project)?.database : undefined);
-    if (!database) return Promise.resolve();
-    const data = { ...delivery, project: session?.project || project, owner: this.owner };
-    return this.serial(async () => { await this.core.request("interactive.delivery", { database, owner: this.owner, data, apply: true }); this.changed(); });
+    let association = this.associations.get(delivery.id);
+    if (!association) {
+      const source = this.sessions.get(delivery.source), target = this.sessions.get(delivery.target);
+      if (!source || !target) return Promise.reject(new Error("Both managed sessions must have durable records before delivery."));
+      if (source.owner !== target.owner || projectKey(source.database) !== projectKey(target.database)) return Promise.reject(new Error("Delivery ledger ownership does not match."));
+      association = { database: target.database, project: target.project, owner: target.owner, source_session: source.id, target_session: target.id };
+      this.associations.set(delivery.id, association);
+    }
+    const owner = this.owners.get(projectKey(association.project));
+    if (!owner || owner.id !== association.owner) return Promise.resolve();
+    const { database, ...identity } = association;
+    const data = { ...delivery, ...identity };
+    return this.serial(async () => { this.checkOwner(identity.project, identity.owner); await this.core.request("interactive.delivery", { database, owner: identity.owner, data, apply: true }); this.changed(); });
+  }
+  private checkOwner(project: string, ownerId: string): void {
+    const owner = this.owners.get(projectKey(project));
+    if (!owner || owner.id !== ownerId || owner.epoch !== this.core.epoch) throw new Error("The writer connection was lost. Stop the terminal and start a new managed session.");
+  }
+  private async closeOwner(project: string): Promise<void> {
+    const key = projectKey(project), owner = this.owners.get(key); if (!owner) return;
+    try { this.checkOwner(project, owner.id); await this.core.request("interactive.end", { database: owner.database, owner: owner.id, apply: true }); }
+    finally { this.owners.delete(key); this.core.release(owner.id); }
   }
   async end(): Promise<void> {
-    for (const database of this.databases) await this.serial(() => this.core.request("interactive.end", { database, owner: this.owner, apply: true }));
+    for (const owner of [...this.owners.values()]) await this.serial(() => this.closeOwner(owner.project)).catch(() => {});
   }
   async finish(node: string, data: Record<string, unknown> = {}): Promise<void> {
     const session = this.sessions.get(node); if (!session) return;
-    await this.record(node, "session_stopped", data);
-    if (this.sessions.get(node)?.id === session.id) this.sessions.delete(node);
+    try { await this.record(node, "session_stopped", data); }
+    finally {
+      if (this.sessions.get(node)?.id === session.id) this.sessions.delete(node);
+      if (![...this.sessions.values()].some(s => s.owner === session.owner)) await this.serial(() => this.closeOwner(session.project));
+    }
   }
   async report(project: string, days?: number): Promise<any> {
     const binding = this.binding(project) || await this.inspect(project);
     await this.chain;
-    return this.core.request("interactive.report", { database: binding.database, project, owner: this.owner, ...(days ? { days } : {}) });
+    return this.core.request("interactive.report", { database: binding.database, project, owner: this.owners.get(projectKey(project))?.id || this.owner, ...(days ? { days } : {}) });
   }
 }
 

@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "local-agent-bridge"
-version = "0.1.0a2"
-description = "PatchPort: a local bridge for Codex and Claude Code consultation"
+version = "0.4.0"
+description = "Internal management core for the PatchPort VS Code extension"
 requires-python = ">=3.11"
 readme = "README.md"
 license = "MIT"
@@ -20,8 +20,3 @@ agent-bridge = "agent_bridge.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-
-[tool.setuptools.data-files]
-"share/agent-bridge/skills/agent-bridge" = ["skills/agent-bridge/SKILL.md"]
-"share/agent-bridge/skills/agent-bridge/references" = ["skills/agent-bridge/references/usage.md"]
-"share/agent-bridge/skills/agent-bridge/agents" = ["skills/agent-bridge/agents/openai.yaml"]

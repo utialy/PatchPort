@@ -11,8 +11,8 @@ import sys
 import threading
 import time
 
-from . import answers, interactive, p1, runner_manager, setup_project, usage
-from .storage import Store, Transaction, identifier, readonly_database
+from . import answers, history, interactive, interactive_guard, p1, project_data, records, records_body, records_guard, runner_manager, setup_project, usage
+from .storage import Store, Transaction, identifier, path_identity, readonly_database
 
 PROTOCOL = 1
 MAX_REQUEST = 256 * 1024
@@ -24,10 +24,12 @@ IDLE_SECONDS = 300
 ACTIONS = {
     'capabilities': (set(), set()),
     'project.inspect': ({'project'}, {'config'}),
+    'project.data.inspect': ({'project'}, {'config', 'databases', 'detached'}),
     'usage': ({'config'}, {'days', 'endpoint', 'batch', 'group_by'}),
     'interactive.initialize': ({'database', 'apply'}, set()),
+    'interactive.owner.open': ({'database', 'project', 'owner', 'apply'}, set()),
     'interactive.begin': ({'database', 'apply', 'session_id', 'node', 'project', 'provider', 'name', 'owner'}, set()),
-    'interactive.record': ({'database', 'apply', 'session_id', 'event_id', 'kind', 'data'}, {'turn'}),
+    'interactive.record': ({'database', 'apply', 'session_id', 'event_id', 'kind', 'data'}, {'turn', 'owner'}),
     'interactive.delivery': ({'database', 'apply', 'owner', 'data'}, set()),
     'interactive.end': ({'database', 'apply', 'owner'}, set()),
     'interactive.report': ({'database', 'project'}, {'days', 'limit', 'owner'}),
@@ -47,6 +49,13 @@ ACTIONS = {
     'tasks.list': ({'config'}, {'limit'}),
 }
 ACTIONS.update(p1.ACTIONS)
+ACTIONS.update(history.ACTIONS)
+ACTIONS.update(records.ACTIONS)
+ACTIONS.update(records_body.ACTIONS)
+from . import connection_remove
+ACTIONS.update(connection_remove.ACTIONS)
+from . import project_cleanup
+ACTIONS.update(project_cleanup.ACTIONS)
 
 
 class Problem(ValueError):
@@ -78,11 +87,17 @@ def validate_args(action, args):
     for key in ('config', 'project', 'database'):
         if key in args and not Path(args[key]).is_absolute():
             fail('ABSOLUTE_PATH_REQUIRED')
-    for key in ('starter', 'create_project', 'cancel_active', 'apply'):
+    for key in ('starter', 'create_project', 'cancel_active', 'apply', 'detached'):
         if key in args and type(args[key]) is not bool:
             fail('INVALID_ARGUMENTS')
     if 'apply' in required and args['apply'] is not True:
         fail('EXPLICIT_APPLY_REQUIRED')
+    if action == 'project.data.inspect' and 'databases' in args:
+        values = args['databases']
+        if (not isinstance(values, list) or len(values) > 4 or any(
+                not text_value(value) or not Path(value).is_absolute()
+                or Path(value).name not in ('queue.sqlite3', 'interactive.sqlite3') for value in values)):
+            fail('INVALID_ARGUMENTS')
     for key in ('include', 'writable'):
         if key in args and (not isinstance(args[key], list) or not args[key]
                             or any(not text_value(p) for p in args[key])):
@@ -144,6 +159,8 @@ def list_tasks(config, limit=20):
                           'ORDER BY created DESC,id DESC LIMIT ?', (limit + 1,)).fetchall()
         tasks = [dict(row) for row in rows[:limit]]
         for task in tasks:
+            from .records_guard import decorate
+            decorate(db,task)
             task['state'] = visible_state(task['state'])
         return dict(tasks=tasks, limit=limit, more=len(rows) > limit)
     finally:
@@ -179,6 +196,16 @@ class Session:
     def __init__(self):
         self.plans = {}
         self.seen = set()
+        self.writers = {}
+
+    def close(self):
+        self.plans.clear()
+        for writer in self.writers.values():
+            try:
+                writer.close(abandon=True)
+            except (OSError, ValueError, RuntimeError, sqlite3.Error):
+                writer.release()
+        self.writers.clear()
 
     def handle(self, request):
         request_id = None
@@ -192,20 +219,23 @@ class Session:
                 fail('UNSUPPORTED_PROTOCOL')
             if request_id in self.seen:
                 fail('DUPLICATE_REQUEST', 'Inspect the previous outcome; do not repeat a mutation automatically')
-            if len(self.seen) >= MAX_REQUESTS:
-                fail('SESSION_FULL', 'Open a new core session and preview again')
-            self.seen.add(request_id)
             action = request['action']
             if not isinstance(action, str) or action not in ACTIONS:
                 fail('UNSUPPORTED_ACTION')
             args = request['args']
             validate_args(action, args)
+            closing = self.writers and (action == 'interactive.end' or action == 'interactive.record' and args.get('kind') == 'session_stopped')
+            if len(self.seen) >= MAX_REQUESTS and not (closing and len(self.seen) < MAX_REQUESTS + 256):
+                fail('SESSION_FULL', 'Stop managed sessions, then open a new core connection')
+            self.seen.add(request_id)
             self.plans = {key: item for key, item in self.plans.items() if item[0] > time.monotonic()}
             result = self.dispatch(action, args)
             if isinstance(result, dict) and result.get('ok') is False:
                 return response(request_id, result=result, code='OPERATION_INCOMPLETE',
                                 next_action='Review the result; preview again before another apply')
             return response(request_id, result=result)
+        except (interactive_guard.LedgerError, records_guard.RecordsError) as exc:
+            return response(request_id, code=exc.code, next_action='Inspect history ownership and create a new explicit plan; do not retry automatically')
         except Problem as exc:
             return response(request_id, code=exc.code, next_action=exc.next_action)
         except (OSError, ValueError, RuntimeError, TypeError, KeyError, OverflowError,
@@ -215,14 +245,32 @@ class Session:
                             next_action='Inspect project state with the CLI; preview again before applying')
 
     def dispatch(self, action, args):
+        if action in project_cleanup.ACTIONS:
+            return project_cleanup.dispatch(self,action,args)
+        if action in connection_remove.ACTIONS:
+            return connection_remove.dispatch(self,action,args)
+        if action in records_body.ACTIONS:
+            return records_body.dispatch(self,action,args)
+        if action in records.ACTIONS:
+            return records.dispatch(action, args)
+        if action in history.ACTIONS:
+            return history.dispatch(self, action, args)
         if action in p1.ACTIONS:
             return p1.dispatch(self, action, args)
         if action == 'capabilities':
             from . import __version__
             return dict(core_version=__version__, python=sys.version.split()[0], protocol=PROTOCOL,
-                        actions=sorted(ACTIONS), interactive_schema=interactive.SCHEMA, workflow_schema=1)
+                        actions=sorted(ACTIONS), interactive_schema=interactive.SCHEMA, workflow_schema=1,
+                        project_data_schema=project_data.SCHEMA, copy_cleanup_schema=p1.copies.SCHEMA,
+                        interactive_writer_protocol=2, history_schema=1, records_schema=records.SCHEMA, records_body_schema=records_body.SCHEMA, records_flow_schema=1, connection_remove_schema=1, project_cleanup_schema=1)
+        if action == 'project.data.inspect':
+            return project_data.inspect(**args)
         if action == 'project.inspect':
             project = Path(args['project']).resolve(strict=True)
+            from .connection_guard import marker
+            removed=marker(project)
+            if removed and removed['state']!='RECONNECTED':
+                return dict(linked=False,project=str(project),config=args.get('config',str(project/'bridge.json')),database=removed['database'],endpoints={},connection_removed=True,connection_operation=removed['operation'])
             path = Path(args.get('config', project / 'bridge.json'))
             if not path.exists():
                 return dict(linked=False, project=str(project), config=str(path), database=None, endpoints={})
@@ -236,16 +284,30 @@ class Session:
                         control=runner_manager.inspect(config))
         if action.startswith('interactive.'):
             path = args['database']
+            key = (path_identity(interactive_guard.database_path(path)), args.get('owner'))
+            writer = self.writers.get(key)
+            if action == 'interactive.owner.open':
+                if writer is not None:
+                    if path_identity(writer.project) != path_identity(args['project']):
+                        raise interactive_guard.LedgerError('SESSION_OWNER_MISMATCH')
+                    return dict(owner=writer.identity(), schema=2, writer_protocol=2)
+                writer = interactive_guard.WriterLease(path, args['project'], args['owner'])
+                result = writer.open()
+                self.writers[key] = writer
+                return result
             if action == 'interactive.initialize':
                 return interactive.initialize(path)
             if action == 'interactive.begin':
-                return interactive.begin(path, **{key:args[key] for key in ('session_id', 'node', 'project', 'provider', 'name', 'owner')})
+                return interactive.begin(path, **{key:args[key] for key in ('session_id', 'node', 'project', 'provider', 'name', 'owner')}, writer=writer)
             if action == 'interactive.record':
-                return interactive.record(path, **{key:args[key] for key in ('session_id', 'event_id', 'kind', 'data')}, turn=args.get('turn'))
+                return interactive.record(path, **{key:args[key] for key in ('session_id', 'event_id', 'kind', 'data')}, turn=args.get('turn'), writer=writer)
             if action == 'interactive.delivery':
-                return interactive.delivery(path, args['owner'], args['data'])
+                return interactive.delivery(path, args['owner'], args['data'], writer=writer)
             if action == 'interactive.end':
-                return interactive.end_owner(path, args['owner'])
+                result = interactive.end_owner(path, args['owner'], writer=writer)
+                if writer is not None:
+                    self.writers.pop(key)
+                return result
             if action == 'interactive.event':
                 return interactive.read_event(path, args['project'], args['event_id'])
             if action == 'interactive.resume':
@@ -300,7 +362,7 @@ class Session:
             return dict(result, ok=code == 0)
         if action == 'result':
             return read_result(config, args['task_id'])
-        store = Store(config['state'])
+        store = Store(config['state'], config=config)
         if action == 'limit':
             store.set_limit(args['max_calls'])
         else:
@@ -351,10 +413,19 @@ def serve(source=None, target=None, *, idle_timeout=IDLE_SECONDS):
             inbox.put(b'')
     threading.Thread(target=read, daemon=True).start()
     session = Session()
+    try:
+        return _serve_session(session, inbox, target, idle_timeout)
+    finally:
+        session.close()
+
+
+def _serve_session(session, inbox, target, idle_timeout):
     while True:
         try:
             line = inbox.get(timeout=idle_timeout)
         except queue.Empty:
+            if session.writers:
+                continue
             return 0
         if not line:
             return 0

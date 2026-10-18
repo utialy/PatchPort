@@ -1,6 +1,6 @@
 # Reviewed reference summaries
 
-Use a version 2 context plan to reuse a summary you have reviewed. PatchPort does not generate the summary, search previous conversations, or resume a provider session automatically. This feature is in current source builds, after the published 0.1.0a2 assets.
+Use a version 2 context plan to reuse a summary you have reviewed. PatchPort does not generate the summary, search previous conversations, or resume a provider session automatically. These plans are available in the extension's Project work panel.
 
 ## Prepare the inputs
 

@@ -46,6 +46,10 @@ def files(root):
     return result
 
 def create(config, id_, selected=None):
+    from .records_guard import require_artifacts
+    if require_artifacts(config, id_, write=True, active=True):
+        from .setup_project import selected_snapshot
+        selected_snapshot(config['root'],config['include'] if selected is None else selected)
     home = config["state"] / "workspaces" / identifier(id_)
     home.mkdir(parents=True, exist_ok=False)
     project = home / "project"
@@ -65,6 +69,8 @@ def create(config, id_, selected=None):
     return home
 
 def changes(config, home):
+    from .records_guard import require_artifacts
+    require_artifacts(config, Path(home).name, write=True, active=True)
     before = json.loads((home / "baseline.json").read_text(encoding="utf-8"))
     after = files(home / "project")
     result = []
@@ -87,11 +93,14 @@ def replace(source, dest, expected):
     finally: stage.unlink(missing_ok=True)
 
 def review(config, id_, selected=None):
+    from .records_guard import require_artifacts
+    require_artifacts(config, id_, write=selected is not None)
     home = config["state"] / "workspaces" / identifier(id_)
     manifest = json.loads((home / "changes.json").read_text(encoding="utf-8"))
     if selected is None: return manifest
     if not selected or len(set(selected)) != len(selected): raise ValueError("Select unique reviewed paths")
     with FileLock(config["state"] / "promotion.lock"):
+        require_artifacts(config, id_, write=True)
         plan = []
         for rel in selected:
             matches = [c for c in manifest if c["path"] == rel and c["allowed"]]
@@ -119,11 +128,14 @@ def review(config, id_, selected=None):
         return {"backup": backup.name, "state": "APPLIED"}
 
 def recover(config, id_, backup_name, apply=False):
+    from .records_guard import require_artifacts
+    require_artifacts(config, id_, write=apply)
     identifier(backup_name)
     if not backup_name.startswith("backup-"): raise ValueError("Invalid backup")
     home = config["state"] / "workspaces" / identifier(id_)
     backup = safe(home, backup_name)
     with FileLock(config["state"] / "promotion.lock"):
+        require_artifacts(config, id_, write=apply)
         journal = json.loads((backup / "journal.json").read_text(encoding="utf-8"))
         for c in journal["changes"]:
             if digest(safe(backup, c["path"])) != c["before"]: raise ValueError("Damaged backup")

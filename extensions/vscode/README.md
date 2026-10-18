@@ -1,27 +1,30 @@
 # PatchPort for VS Code
 
-Create real AI terminals, route completed replies, inspect durable jobs/usage,
-and submit selected working-copy tasks with explicit promotion and recovery.
+English UI, version **0.4.0**, local Windows x64 VS Code. Run real AI terminals,
+route completed replies, inspect saved jobs/usage, and review selected-copy work.
 
-This is the local Windows x64 0.3.0 extension. It requires a Python 3.11+
-executable configured through patchport.corePython. The VSIX includes core
-source/workflow helpers; provider CLIs and authentication remain yours.
+The VSIX includes the standard-library Python core and fixed helpers. Set
+**patchport.corePython** to a Python 3.11+ executable. Provider CLIs, authentication
+and permissions remain yours. Node.js 24+ is required to build from source.
 
-From the repository root, install the Python source in .venv. Then, from this
-directory, run npm ci and npm run package with Node.js 24+. The Windows VSIX
-is created in .bridge/artifacts at the repository root. Install it through
-VS Code's Install from VSIX action or code --install-extension PATH.
+From the repository root, prepare the internal backend with `py -3 -m venv .venv`
+and `.venv/Scripts/python.exe -m pip install .`. From `extensions/vscode`, run
+`npm ci` and `npm run package`. Install the generated
+`.bridge/artifacts/patchport-0.4.0-win32-x64.vsix` through **Install from VSIX**.
 
-Open a trusted local project and use PatchPort: Open AI Terminal Board.
-Project work provides Submit work, Copies & recovery, Roles & archives, and
-Sessions & updates. Jobs & usage reads saved tasks/results and scoped usage.
+Open **PatchPort: Open AI Terminal Board** in a trusted local folder. Project work
+includes Submit work, Copies & recovery, Roles & archives, Sessions & updates,
+and Data & settings. Guided cleanup previews/applies each conversation/task/flow/
+connection stage separately, preserves usage/IDs/originals/backups, and supports
+receipt lookup and remaining-I/O resume after configuration removal.
 
-Direct terminals operate on the original project. Batch/role workflows use
-selected copies and promote only explicitly reviewed paths. Submitting a task,
-starting a runner and promoting files are separate actions. Missing usage is
-unknown; delivery/claim/input limits do not enforce provider charges.
+Direct terminals use the original project; batch/role workflows use selected
+copies. Submission, runner start and promotion are separate. Missing usage is
+unknown, and claim/delivery/input limits do not enforce actual provider charges.
+No automatic retry or next-stage cleanup apply is performed.
 
-Read the [full screenshot guide](https://github.com/utialy/PatchPort/blob/main/docs/VSCODE_GUIDE.md)
-or the [bundled guide](docs/USER_GUIDE.md). The toolbar Guide button opens it.
-Remote/other-OS extension sessions and external-process handoff are not yet
-validated. Previously published Python release assets are unchanged.
+Read the [bundled guide](docs/USER_GUIDE.md) or
+[online walkthrough](https://github.com/utialy/PatchPort/blob/main/docs/VSCODE_GUIDE.md).
+Remote/other-OS extension sessions and external-process handoff remain unvalidated.
+The public product is the VS Code extension; no separate desktop app/OS installer
+is included. A local build does not imply a Marketplace publication.

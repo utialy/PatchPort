@@ -14,6 +14,7 @@ let inspectorTab = "links";
 const cards = new Map<string, { el: HTMLElement; terminal: Terminal; fit: FitAddon; observer: ResizeObserver }>();
 const pendingOutput = new Map<string, { sequence: number; data: string }[]>();
 const streams = new Map<string, { last: number; waiting: boolean }>();
+const purgedStreams = new Set<string>();
 let expandedId = "";
 const $ = <T extends HTMLElement = HTMLElement>(selector: string): T => document.querySelector(selector)!;
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, className = "", text = ""): HTMLElementTagNameMap[K] => { const element = document.createElement(tag); element.className = className; element.textContent = text; return element; };
@@ -60,6 +61,7 @@ function renderCore(): void {
   const view = state.core;
   if (!view || view.state === "idle" || view.state === "loading") { body.append(el("p", "muted", "Reading existing configuration and databases. Inspection starts neither a runner nor an AI.")); return; }
   if (view.state === "error") { body.append(el("p", "core-error", view.error)); body.append(button("Set Python path", () => post("corePythonSettings"))); return; }
+  if (view.state === "detached") { body.append(el("p", "muted", "Configuration is detached in this workspace. Open Project work > Data & settings to attach the default or select a configuration. Existing records remain.")); return; }
   const binding = view.binding;
   body.append(el("p", "muted", `${binding.linked ? "Existing configuration connected" : "No configuration; managed sessions only"} \u00b7 ${binding.config}\nLedger: ${binding.database}`));
   body.append(el("p", "muted", "Periods use batch task or managed session start time. Missing values are not zero. Reported USD is neither a subscription bill nor remaining quota; it does not enforce charges."));
@@ -87,11 +89,11 @@ function renderCore(): void {
   live.append(el("p", "muted", "Automatic delivery limits count input attempts. Manual questions, tokens and costs are outside this cap."));
   for (const group of state.board.groups) live.append(el("p", "", `${group.name}: automatic deliveries ${group.used}/${group.maxDeliveries} - hops ${group.maxHops} steps - ${group.paused ? "Paused" : "Allowed"}`));
   for (const session of view.history?.sessions || []) {
-    const detail = el("details"); detail.append(el("summary", "", `${session.name} \u00b7 ${session.state} \u00b7 ${new Date(session.started * 1000).toLocaleString()}`));
+    const detail = el("details"); detail.append(el("summary", "", `${session.body_deleted ? "Body deleted - cannot resume" : session.name} \u00b7 ${session.state} \u00b7 ${new Date(session.started * 1000).toLocaleString()}`));
     detail.append(el("p", "muted", `${session.source} \u00b7 ${session.coverage}`), el("pre", "", JSON.stringify(session, null, 2))); live.append(detail);
   }
   live.append(el("h4", "", "Recorded deliveries and responses"));
-  for (const delivery of view.history?.deliveries || []) { const detail = el("details"); detail.append(el("summary", "", `${statusLabels[delivery.status] || delivery.status} \u00b7 ${delivery.source} \u2192 ${delivery.target}`), el("pre", "", delivery.text || ""), el("small", "", delivery.reason || "")); live.append(detail); }
+  for (const delivery of view.history?.deliveries || []) { const detail = el("details"); detail.append(el("summary", "", `${statusLabels[delivery.status] || delivery.status} \u00b7 ${delivery.source} \u2192 ${delivery.target}`), el("pre", "", delivery.body_deleted ? "Body deleted" : delivery.text || ""), el("small", "", delivery.reason || "")); live.append(detail); }
   for (const event of view.history?.events || []) { const detail = el("details"); detail.append(el("summary", "", `${event.kind} \u00b7 ${new Date(event.at * 1000).toLocaleTimeString()}`), el("pre", "", JSON.stringify(event.data, null, 2)), button("Read saved detail", () => post("coreEvent", { project: binding.project, eventId: event.id }))); live.append(detail); }
   if (view.event) { const detail = el("details"); detail.open = true; detail.append(el("summary", "", `Saved detail - ${view.event.kind}`), el("pre", "", JSON.stringify(view.event.data, null, 2))); live.append(detail); }
   const merged = el("section"); merged.append(el("h3", "", "Consumption - batch jobs and managed sessions"));
@@ -316,15 +318,28 @@ $("#arrange").onclick = () => state?.board.nodes.filter(n => n.project === selec
 window.addEventListener("message", event => {
   const m = event.data;
   if (m.type === "state") { state = m.value; workflowPanel.update(state); render(); if (coreOpen) renderCore(); }
-  else if (m.type === "output") { pendingOutput.set(m.id, [...(pendingOutput.get(m.id) || []), ...m.chunks]); flushOutput(m.id); }
+  else if (m.type === "recordsPurged") { if (state && state.core?.project === m.project) state.core = undefined; workflowPanel.purged(m.project); if (coreOpen) renderCore(); }
+  else if (m.type === "historyPurged") {
+    for (const id of m.nodes) {
+      purgedStreams.add(id); streams.delete(id); pendingOutput.delete(id);
+      const card = cards.get(id); if (expandedId === id) closeExpanded();
+      if (card) { card.observer.disconnect(); card.terminal.dispose(); card.el.remove(); cards.delete(id); }
+      const runtime = state?.runtime.find(r => r.id === id); if (runtime) { runtime.lastMessage = ""; runtime.reason = ""; }
+    }
+    if (state) { state.deliveries = state.deliveries.filter(d => !(m.deliveries || []).includes(d.id)); if (state.core?.project === m.project) state.core = undefined; }
+    render(); if (coreOpen) renderCore();
+  }
+  else if (m.type === "output") { if (purgedStreams.has(m.id)) return; pendingOutput.set(m.id, [...(pendingOutput.get(m.id) || []), ...m.chunks]); flushOutput(m.id); }
   else if (m.type === "reset") {
+    purgedStreams.delete(m.id);
     streams.set(m.id, { last: 0, waiting: false }); pendingOutput.delete(m.id); const card = cards.get(m.id);
     if (card) { card.terminal.reset(); card.fit.fit(); post("resize", { id: m.id, cols: card.terminal.cols, rows: card.terminal.rows }); }
   }
   else if (m.type === "snapshot") {
+    if (purgedStreams.has(m.id)) return;
     const card = cards.get(m.id); if (card) {
       streams.set(m.id, { last: m.sequence, waiting: true }); card.terminal.reset(); card.terminal.resize(m.cols, m.rows);
-      card.terminal.write(m.data, () => { streams.set(m.id, { last: m.sequence, waiting: false }); card.fit.fit(); flushOutput(m.id); });
+      card.terminal.write(m.data, () => { if (cards.get(m.id) !== card || purgedStreams.has(m.id)) return; streams.set(m.id, { last: m.sequence, waiting: false }); card.fit.fit(); flushOutput(m.id); });
     }
   }
   else if (m.type === "error") toast(m.text);

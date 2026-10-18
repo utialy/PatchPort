@@ -77,6 +77,7 @@ export class SessionHost extends EventEmitter {
     this.starting.add(node.id);
     this.cancelledStarts.delete(node.id);
     this.router.started(node.id);
+    let launchAttempted = false;
     try {
       await this.initialize();
       if (!(await fs.stat(node.project)).isDirectory()) throw new Error("The project folder is missing.");
@@ -107,6 +108,7 @@ export class SessionHost extends EventEmitter {
       Object.assign(env, { TERM: "xterm-256color", COLORTERM: "truecolor", PATCHPORT_TOKEN: token, PATCHPORT_ENDPOINT: endpoint });
       if (this.closed || this.cancelledStarts.has(node.id)) throw new Error("Terminal start cancelled.");
       const size = this.sizes.get(node.id) || { cols: 90, rows: 22 };
+      launchAttempted = true;
       const child = pty.spawn(invocation.file, invocation.args, { name: "xterm-256color", ...size, cwd: node.project, env, useConpty: true });
       const screen = new HeadlessTerminal({ ...size, scrollback: 2000, allowProposedApi: true });
       const serializer = new SerializeAddon(); screen.loadAddon(serializer as unknown as ITerminalAddon);
@@ -114,7 +116,7 @@ export class SessionHost extends EventEmitter {
       this.sessions.set(node.id, session);
       screen.onData(data => { if (!session.disposed) { try { child.write(data); } catch { /* Process exit can race a terminal status query. */ } } });
       child.onData(data => {
-        if (this.sessions.get(node.id) !== session) return;
+        if (this.sessions.get(node.id) !== session || session.disposed) return;
         session.output = (session.output + data).slice(-256 * 1024);
         const sequence = ++session.sequence;
         session.screen.write(data, () => { if (!session.disposed) this.emit("output", node.id, data, sequence); });
@@ -125,14 +127,19 @@ export class SessionHost extends EventEmitter {
         this.sessions.delete(node.id);
         session.screen.dispose();
         this.router.stopped(node.id);
-        void this.ledger?.finish(node.id, { exitCode }).catch(() => this.router.note("Session-end recording failed; no automatic resend."));
+        this.finishRecord(node.id, { exitCode, confirmed_exit: true });
         this.router.note(`${node.name}: terminal exited (${exitCode}).`);
         this.emit("output", node.id, `\r\n\u001b[90m[PatchPort: process exited ${exitCode}]\u001b[0m\r\n`, ++session.sequence);
       });
       if (profile.provider === "terminal") this.router.setPhase(node.id, "ready", "Ordinary terminal; no automatic AI routing");
       this.emit("started", node.id);
       await this.ledger?.record(node.id, "session_started", { provider: profile.provider });
-    } catch (error) { this.router.setPhase(node.id, "error", String(error)); await this.ledger?.record(node.id, "failed", { stage: "launch" }).catch(() => {}); await this.ledger?.finish(node.id, { stage: "launch_failed" }).catch(() => {}); throw error; }
+    } catch (error) {
+      this.router.stopped(node.id); this.router.setPhase(node.id, "error", String(error));
+      if (this.sessions.has(node.id)) this.stop(node.id);
+      else { await this.ledger?.record(node.id, "failed", { stage: "launch" }).catch(() => {}); await this.ledger?.finish(node.id, { stage: "launch_failed", confirmed_exit: !launchAttempted }).catch(() => {}); }
+      throw error;
+    }
     finally { this.starting.delete(node.id); }
   }
   private async event(session: Running, payload: unknown): Promise<Record<string, unknown> | void> {
@@ -248,6 +255,15 @@ export class SessionHost extends EventEmitter {
     if (session && !session.disposed) { try { session.screen.resize(cols, rows); session.process.resize(cols, rows); } catch { /* Exiting terminals may reject resize. */ } }
   }
   isActive(id: string): boolean { return this.sessions.has(id) || this.starting.has(id); }
-  stop(id: string): void { if (this.starting.has(id)) this.cancelledStarts.add(id); const session = this.sessions.get(id); this.router.stopped(id); if (!session) return; session.disposed = true; if (session.pasteTimer) clearTimeout(session.pasteTimer); try { session.process.kill(); } catch { this.router.note(`${session.node.name}: inspect exit status.`); } session.screen.dispose(); this.sessions.delete(id); void this.ledger?.finish(id).catch(() => this.router.note("Session-end outcome uncertain")); }
-  dispose(): void { this.closed = true; for (const id of [...this.sessions.keys(), ...this.starting]) this.stop(id); this.server?.close(); this.server?.closeAllConnections(); }
+  private finishing = new Set<Promise<void>>();
+  private finishRecord(id: string, data: Record<string, unknown>): void {
+    const work = (this.ledger?.finish(id, data) || Promise.resolve()).catch(() => { this.router.note("Session-end recording failed; no automatic resend."); }).finally(() => this.finishing.delete(work));
+    this.finishing.add(work);
+  }
+  stop(id: string): void { if (this.starting.has(id)) this.cancelledStarts.add(id); const session = this.sessions.get(id); this.router.stopped(id); if (!session) return; session.disposed = true; if (session.pasteTimer) clearTimeout(session.pasteTimer); try { session.process.kill(); } catch { this.router.note(`${session.node.name}: inspect exit status.`); } }
+  async shutdown(): Promise<void> {
+    this.closed = true; for (const id of [...this.sessions.keys(), ...this.starting]) this.stop(id); this.server?.close(); this.server?.closeAllConnections();
+    for (let count = 0; count < 30 && (this.sessions.size || this.starting.size || this.finishing.size); count++) await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  dispose(): void { void this.shutdown(); }
 }

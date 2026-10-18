@@ -162,36 +162,6 @@ def external_environment():
             kernel.SetDllDirectoryW(sys._MEIPASS)
 
 
-def verify_installed_core(python):
-    """Import the installed management API without authentication or AI calls."""
-    code = ('import json,sys; from agent_bridge import management; '
-            'print(json.dumps(dict(protocol=management.PROTOCOL, isolated=sys.flags.isolated)))')
-    with external_environment() as env:
-        result = subprocess.run([str(python), '-B', '-c', code], cwd=python.parent,
-                                env=env, stdin=subprocess.DEVNULL, capture_output=True,
-                                timeout=20, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
-    if result.returncode or json.loads(result.stdout).get('protocol') != 1:
-        raise RuntimeError('Installed core verification failed; preserve this incomplete installation')
-
-
-def create_windows_shortcut(path, target):
-    """Create only the explicitly named installer-owned shortcut; never run it."""
-    if os.name != 'nt':
-        raise RuntimeError('Windows shortcuts require Windows')
-    script = ("$ErrorActionPreference='Stop'; "
-              "$s=(New-Object -ComObject WScript.Shell).CreateShortcut($env:PATCHPORT_LINK_PATH); "
-              "$s.TargetPath=$env:PATCHPORT_LINK_TARGET; "
-              "$s.WorkingDirectory=[IO.Path]::GetDirectoryName($env:PATCHPORT_LINK_TARGET); $s.Save()")
-    with external_environment() as env:
-        env.update(PATCHPORT_LINK_PATH=str(path), PATCHPORT_LINK_TARGET=str(target))
-        powershell = Path(os.environ['SystemRoot']) / 'System32/WindowsPowerShell/v1.0/powershell.exe'
-        result = subprocess.run([str(powershell), '-NoProfile', '-NonInteractive', '-Command', script],
-                                env=env, stdin=subprocess.DEVNULL, capture_output=True, timeout=20,
-                                creationflags=subprocess.CREATE_NO_WINDOW)
-    if result.returncode or not path.is_file():
-        raise RuntimeError('Shortcut creation failed; inspect the partial installation')
-
-
 def start_background(argv, cwd, log, env):
     """Detach a runner from its caller without changing provider ownership."""
     options = ({'creationflags': subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP}

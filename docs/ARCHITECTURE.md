@@ -61,7 +61,7 @@ The queue's cumulative claim count includes failures after claim. Pause stops ne
 
 Setup dispatches before queue initialization and builds on the connector's installation plan. Generated configuration and starter files remain in memory until explicit application. Missing project roots use a temporary validation root. Setup checks selected input paths and hashes, then rechecks inputs and CLI resolution after the runtime import probe. The connector also guards configuration and manifest hashes and preserves ownership of identical pre-existing user files. Partial writes report backup evidence without automatic retry or deletion. Authentication and provider invocation are not part of setup.
 
-The connect command dispatches before configuration/queue initialization. Its default is a read-only preview; explicit application preserves conflicts and backups. setup.py bundles only the reviewed helper, template, and peer-consult files inside the package. Installed code reads those assets without finding another checkout. The source checkout uses its fixed source layout. The legacy connector delegates to the same module.
+The connect command dispatches before configuration/queue initialization. Its default is a read-only preview; explicit application preserves conflicts and backups. setup.py bundles only the reviewed helper, template, and peer-consult files inside the package. Installed code reads those assets without finding another checkout. The source checkout uses its fixed source layout.
 
 Summary plans use schema=2 and SUMMARY_QUEUED/SUMMARY_RUNNING states so older runners cannot claim or recover them. The new Store normalizes these for callers. Summary bodies and provenance are saved in the submission transaction. Execution rechecks source, metadata, configuration, and copied full files before launching a provider. Prompt files preserve the UTF-8 bytes counted by the budget. Role helpers retain full/omit plans; they do not submit summary plans. See [summary inputs](CONTEXT_SUMMARIES.md).
 
@@ -72,3 +72,29 @@ The flow lock covers host checks as well as provider stages. flow_cleanup builds
 role_review and project_overview provide read-only observations. role_manage performs explicitly selected promotion, recovery, or role-workspace cleanup. flow_archive reads verified historical evidence; it does not create archives or delete flows.
 
 Files and multiple databases do not form a globally atomic snapshot. A heartbeat or lock observation does not prove provider responsiveness. A working copy does not replace the provider sandbox.
+
+## Project data and cleanup
+
+Data inspection reads bounded metadata without creating state. Workspace
+configuration changes use atomic snapshots and explicit mirror finalization.
+Selected-copy cleanup preserves answers, claim counts and recovery evidence.
+Conversation writers hold verified leases; body deletion requires confirmed exit
+and explicit ledger preparation. Historical or uncertain writers are not adopted.
+
+Protected task/flow records fence older writers. Body deletion keeps IDs, usage,
+limits and deduplication metadata, while file/DB partial work has durable receipts.
+Connection removal publishes execution protection before deleting selected files,
+keeps settings last, and remains queryable/resumable without the configuration.
+Explicit reconnection does not restore files or start providers.
+
+Guided cleanup uses a separate body-free project-cleanup.sqlite3 coordinator.
+Each conversation/task/flow/connection stage is previewed and applied separately.
+Persisted child IDs resolve response loss before another action. Partial I/O
+resumes the same child operation; receipt-only finalization never repeats deletion.
+Residual counts retain unknown values and distinguish preserved controls/backups
+from forensic erasure. See [data management](PROJECT_DATA.md).
+
+The public product is the VS Code extension. The Python package and fixed helpers
+are its internal backend/build inputs. Standalone desktop applications and OS
+installers are not included. Service registration detection remains in the backend
+to preserve ownership and stop removal/execution from bypassing existing services.

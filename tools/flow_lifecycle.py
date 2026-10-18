@@ -1,5 +1,6 @@
 """Shared flow-lifetime lock paths for execution and artifact management."""
 from pathlib import Path
+import contextlib
 
 from agent_bridge.storage import FileLock, identifier
 from role_review import safe
@@ -18,5 +19,10 @@ def lock_path(project, config, flow):
     return safe(project, (state / 'flow-locks' / (flow + '.lock')).relative_to(project).as_posix())
 
 
-def lock(project, config, flow):
-    return FileLock(lock_path(project, config, flow))
+@contextlib.contextmanager
+def lock(project, config, flow, *, executing=False):
+    from agent_bridge.records_flow import require
+    require(config,flow,write=True,allow_active=executing)
+    with FileLock(lock_path(project, config, flow)):
+        require(config,flow,write=True,allow_active=executing)
+        yield

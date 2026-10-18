@@ -105,6 +105,11 @@ def overview(project):
         archive_view = None
         archived = False
         try:
+            from agent_bridge.records_flow import status
+            protected=status(config,entry.name)
+            if protected and protected['body_state']!='NORMAL':
+                flows.append(dict(id=entry.name,saved_phase='BODY_DELETED' if protected['body_state']=='DELETED' else 'BODY_PURGING',body_state=protected['body_state'],roles={},checks=[],review_is_approval=False,task_success='NOT_EVALUATED'))
+                continue
             flow = workspace.safe(project, '.role-flows/' + entry.name)
             if not flow.is_dir() and not shared:
                 continue

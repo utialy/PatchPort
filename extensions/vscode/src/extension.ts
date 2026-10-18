@@ -4,8 +4,9 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { Board, NodeConfig, Profile, Router, bounded, defaultBoard, restoreBoard, validateProfile, explicitTerminalText, projectKey } from "./model";
 import { SessionHost } from "./session";
 import { CoreClient, Ledger, endpointProfiles } from "./core";
-import { affectedPaths, dirtyConflicts, resumeProfile, runtimeReport, workflowActions } from "./workflow";
-import { StateStore } from "./stateStore";
+import { affectedPaths, cleanupRoots, dirtyConflicts, resumeProfile, runtimeReport, workflowActions } from "./workflow";
+import { Configs, Snapshot, StateStore } from "./stateStore";
+import { changedProject, DataAction, DataPlan, dataActions, planProject, validateDataPlan } from "./projectData";
 
 let controller: Controller | undefined;
 const defaultProfiles = (): Profile[] => [
@@ -23,7 +24,38 @@ class Controller implements vscode.TreeDataProvider<vscode.TreeItem>, vscode.Dis
   readonly core: CoreClient;
   readonly ledger: Ledger;
   readonly stateStore: StateStore;
-  private savedConfigs: Record<string, string> = {};
+  private savedConfigs: Configs = {};
+  private mirrorChain: Promise<void> = Promise.resolve();
+  private dataView: any = { state: "idle" };
+  private dataPlan?: DataPlan;
+  private dataBusy = false;
+  private historyView: any = { state: "idle" };
+  private historyBusy = false;
+  private recordsView: any = { state: "idle" };
+  private recordsRevision = 0;
+  private recordsReads = 0;
+  private bodyView: any = { state: "idle" };
+  private bodyBusy = false;
+  private bodyRevision = 0;
+  private bodyPlan?: { id: string; project: string; config: string; database: string; report: any; expires: number };
+  private bodyReceipt?: { project: string; database: string; operation: string };
+  private connectionView: any = { state: "idle" };
+  private connectionBusy = false;
+  private connectionEpoch = 0;
+  private connectionPlan?: { id: string; project: string; database: string; report: any; expires: number };
+  private connectionReceipt?: { project: string; database: string; operation: string };
+  private cleanupView: any = { state: "idle" };
+  private cleanupBusy = false;
+  private cleanupEpoch = 0;
+  private cleanupPlan?: { id: string; project: string; database: string; report: any; expires: number };
+  private cleanupReceipt?: { project: string; database: string; operation: string };
+  private historyRevision = 0;
+  private historyPlan?: { id: string; project: string; database: string; config: string; report: any; expires: number };
+  private historyReceipt?: { project: string; database: string; operation: string };
+  private coreReads = 0;
+  private starting = new Set<string>();
+  private dataEpoch = 0;
+  private dataDirty = false;
   private savedVersion = "";
   private persistenceError = "";
   private deliverySnapshots = new Map<string, string>();
@@ -43,9 +75,21 @@ class Controller implements vscode.TreeDataProvider<vscode.TreeItem>, vscode.Dis
   private subscriptions: vscode.Disposable[] = [];
   constructor(readonly context: vscode.ExtensionContext) {
     this.stateStore = new StateStore(context.globalStorageUri.fsPath, this.projects());
+    this.historyReceipt = context.workspaceState.get("history.receipt.v1");
+    this.bodyReceipt = context.workspaceState.get("records.receipt.v1");
+    this.connectionReceipt = context.workspaceState.get("connection.receipt.v1");
+    this.cleanupReceipt = context.workspaceState.get("cleanup.receipt.v1");
     let snapshot: any;
     try { snapshot = this.stateStore.load(); } catch (error) { this.persistenceError = String(error); }
-    this.savedConfigs = snapshot?.configs || {}; this.savedVersion = snapshot?.version || "";
+    this.savedConfigs = { ...(snapshot?.configs || context.workspaceState.get<Configs>("core.settings.v2") || {}) }; this.savedVersion = snapshot?.version || "";
+    this.savedConfigs = Object.fromEntries(Object.entries(this.savedConfigs).filter(([, value]) => value === null || typeof value === "string" && path.isAbsolute(value)).map(([project, value]) => [projectKey(project), value]));
+    if (!snapshot || snapshot.schema === 1) for (const project of this.projects()) {
+      const key = projectKey(project);
+      if (Object.hasOwn(this.savedConfigs, key)) continue;
+      const legacy = context.workspaceState.keys().find(k => k.startsWith("core.config.") && projectKey(k.slice("core.config.".length)) === key);
+      const value = legacy ? context.workspaceState.get<string>(legacy) : undefined;
+      if (value && path.isAbsolute(value)) this.savedConfigs[key] = value;
+    }
     const board = restoreBoard(snapshot?.board || context.workspaceState.get("board.v1"), this.projects());
     this.core = new CoreClient(vscode.workspace.getConfiguration("patchport").get<string>("corePython", "python"), path.join(context.extensionPath, "core"));
     this.ledger = new Ledger(this.core, path.join(context.globalStorageUri.fsPath, "ledgers"), () => this.changed());
@@ -69,9 +113,15 @@ class Controller implements vscode.TreeDataProvider<vscode.TreeItem>, vscode.Dis
   }
   projects(): string[] { return (vscode.workspace.workspaceFolders || []).filter(f => f.uri.scheme === "file").map(f => f.uri.fsPath); }
   private selectedConfig(project: string): string | undefined {
-    const canonical = `core.config.${projectKey(project)}`;
-    const legacy = this.context.workspaceState.keys().find(key => key.startsWith("core.config.") && projectKey(key.slice("core.config.".length)) === projectKey(project));
-    return this.savedConfigs[projectKey(project)] || this.context.workspaceState.get<string>(canonical) || (legacy ? this.context.workspaceState.get<string>(legacy) : undefined);
+    return this.savedConfigs[projectKey(project)] || undefined;
+  }
+  private detached(project: string): boolean { return this.savedConfigs[projectKey(project)] === null; }
+  private requireAttached(project: string): void {
+    if (this.cleanupBusy || this.cleanupPlan) throw new Error("Finish the project cleanup stage and preview first.");
+    if (this.connectionBusy || this.connectionPlan) throw new Error("Finish connection-file management and its preview first.");
+    if (this.persistenceError) throw new Error("Check board persistence and reopen the window: " + this.persistenceError);
+    if (this.dataBusy || this.historyBusy || this.bodyBusy || this.stateStore.pending) throw new Error("Finish data and settings management before starting work.");
+    if (this.detached(project)) throw new Error("Configuration is detached in this workspace. Explicitly reconnect in Data & settings.");
   }
   profiles(): Profile[] {
     const configured = vscode.workspace.getConfiguration("patchport").get<unknown[]>("profiles", []);
@@ -87,12 +137,19 @@ class Controller implements vscode.TreeDataProvider<vscode.TreeItem>, vscode.Dis
       trusted: vscode.workspace.isTrusted, supported: !vscode.env.remoteName && process.platform === "win32", platform: process.platform, remote: vscode.env.remoteName || "",
       deliveries: this.router.deliveries.slice(-100).map(d => ({ ...d, text: d.text.slice(0, 2000) })), notices: this.router.notices, routes: this.router.board.edges.map(e => this.router.routeStatus(e)),
       external: [...this.external].map(([id, t]) => ({ id, name: t.name, capability: "focus-and-explicit-input" })), version: this.context.extension.packageJSON.version, core: this.coreView,
+      projectData: { ...this.dataView, pending: this.stateStore.pending, busy: this.dataBusy }, detachedProjects: this.projects().filter(p => this.detached(p)),
+      conversationData: { ...this.historyView, busy: this.historyBusy, receipt: this.historyReceipt },
+      recordData: this.recordsView,
+      recordBody: { ...this.bodyView, busy: this.bodyBusy, receipt: this.bodyReceipt },
+      connectionData: { ...this.connectionView, busy: this.connectionBusy, receipt: this.connectionReceipt },
+      cleanupData: { ...this.cleanupView, busy: this.cleanupBusy, receipt: this.cleanupReceipt },
       workflow: this.workflowView, lifecycle: { ...this.runtimeView, active: this.host.sessions.size, previousVersion: this.savedVersion || this.context.workspaceState.get("runtime.version"), restartRequired: (this.savedVersion || this.context.workspaceState.get("runtime.version")) !== this.context.extension.packageJSON.version, persistence: this.persistenceError || "READY" }
     };
   }
   private post(value: unknown): void { void this.panel?.webview.postMessage(value); }
   private changed(): void {
     if (this.disposed) return;
+    if (this.dataBusy || this.stateStore.pending) this.dataDirty = true;
     for (const delivery of this.router.deliveries) {
       const key = JSON.stringify(delivery);
       if (this.deliverySnapshots.get(delivery.id) === key || delivery.status === "sent") continue;
@@ -109,10 +166,128 @@ class Controller implements vscode.TreeDataProvider<vscode.TreeItem>, vscode.Dis
     this.saveTimer = setTimeout(() => { this.saveTimer = undefined; this.saveState(); }, 200);
   }
   private saveState(): void {
-    void this.context.workspaceState.update("board.v1", this.router.board);
-    for (const project of this.projects()) { const selected = this.selectedConfig(project); if (selected) this.savedConfigs[projectKey(project)] = selected; }
-    try { this.stateStore.save(this.router.board, this.savedConfigs, this.context.extension.packageJSON.version); this.persistenceError = ""; }
+    if (this.dataBusy || this.stateStore.pending) return;
+    try {
+      this.stateStore.save(this.router.board, this.savedConfigs, this.context.extension.packageJSON.version); this.persistenceError = "";
+      void this.mirrorSnapshot(this.stateStore.snapshot()!).catch(error => { this.persistenceError = String(error); this.post({ type: "state", value: this.getState() }); });
+    }
     catch (error) { this.persistenceError = String(error); this.post({ type: "state", value: this.getState() }); }
+  }
+  private mirrorSnapshot(snapshot: Snapshot): Promise<void> {
+    const next = this.mirrorChain.then(async () => {
+      this.stateStore.assertUnchanged();
+      await this.context.workspaceState.update("board.v1", snapshot.board);
+      await this.context.workspaceState.update("core.settings.v2", snapshot.configs);
+      for (const name of this.context.workspaceState.keys().filter(k => k.startsWith("core.config."))) {
+        const project = projectKey(name.slice("core.config.".length));
+        if (this.projects().some(p => projectKey(p) === project)) await this.context.workspaceState.update(name, undefined);
+      }
+      for (const [project, config] of Object.entries(snapshot.configs)) if (config) await this.context.workspaceState.update(`core.config.${projectKey(project)}`, config);
+    });
+    this.mirrorChain = next.catch(() => {}); return next;
+  }
+  private dataProject(project: string): string {
+    this.requireWorkspace();
+    const selected = this.projects().find(p => projectKey(p) === projectKey(project));
+    if (!selected) throw new Error("Select an open project.");
+    return selected;
+  }
+  private publishData(): void { this.post({ type: "state", value: this.getState() }); this.treeEmitter.fire(); }
+  private dataIdle(project: string, connection = false, cleanup = false): void {
+    if (!cleanup && (this.cleanupBusy || this.cleanupPlan)) throw new Error("Finish the project cleanup preview first.");
+    if (!connection && (this.connectionBusy || this.connectionPlan)) throw new Error("Finish the connection-file preview first.");
+    if (this.workflowBusy || this.workflowPlan || this.coreReads || this.starting.size || this.ledger.isBusy(project)) throw new Error("Finish active queries, work and shutdown records; discard previews before trying again.");
+    const ids = new Set(this.router.board.nodes.filter(n => projectKey(n.project) === projectKey(project)).map(n => n.id));
+    if ([...ids].some(id => this.host.isActive(id)) || this.router.deliveries.some(d => (ids.has(d.source) || ids.has(d.target)) && ["queued", "sent"].includes(d.status))) throw new Error("Stop this project's terminals and pending deliveries first.");
+    const config = this.selectedConfig(project) || path.join(project, "bridge.json");
+    if (this.dirtyFiles().some(file => projectKey(file) === projectKey(config))) throw new Error("Save or revert unsaved configuration edits first.");
+    this.stateStore.assertUnchanged();
+  }
+  private async dataFacts(project: string, targetConfig?: string): Promise<any> {
+    const capabilities = await this.core.request("capabilities");
+    if (capabilities.project_data_schema !== 1 || !capabilities.actions?.includes("project.data.inspect")) throw new Error("This core does not support data inspection. Check the core and extension versions.");
+    const inventory = await this.core.request("project.data.inspect", { project, config: this.selectedConfig(project) || path.join(project, "bridge.json"), databases: await this.ledger.candidates(project), detached: this.detached(project) });
+    const target = targetConfig ? await this.core.request("project.data.inspect", { project, config: targetConfig }) : undefined;
+    return { inventory, target, revision: JSON.stringify([inventory.revision, target?.revision || null]) };
+  }
+  async inspectProjectData(project: string): Promise<any> {
+    project = this.dataProject(project); if (this.dataBusy) throw new Error("Finish the configuration change before inspecting.");
+    const epoch = ++this.dataEpoch; this.dataPlan = undefined;
+    this.dataView = { state: "loading", project }; this.publishData(); this.coreReads++;
+    try {
+      const facts = await this.dataFacts(project);
+      const cards = this.router.board.nodes.filter(n => projectKey(n.project) === projectKey(project));
+      if (epoch === this.dataEpoch) this.dataView = { state: "ready", project, inventory: facts.inventory, board: { cards: cards.length, snapshot: this.stateStore.file }, profiles: { scope: "user_shared", count: this.profiles().length }, binding: this.ledger.binding(project)?.database };
+      return facts.inventory;
+    } catch (error) { if (epoch === this.dataEpoch) this.dataView = { state: "error", project, error: String(error) }; throw error; }
+    finally { this.coreReads--; this.publishData(); }
+  }
+  async previewProjectData(project: string, action: DataAction, config?: string): Promise<DataPlan> {
+    project = this.dataProject(project);
+    if (this.historyBusy || this.historyPlan || this.bodyBusy || this.bodyPlan) throw new Error("Finish body management or discard its preview.");
+    if (this.dataBusy || this.stateStore.pending || !dataActions.has(action)) throw new Error("Finish the active configuration change first.");
+    this.dataIdle(project); this.dataBusy = true; const epoch = ++this.dataEpoch; this.dataPlan = undefined;
+    this.dataView = { ...this.dataView, project, state: "loading", plan: undefined, error: undefined }; this.publishData();
+    try {
+      const targetConfig = action === "select_config" ? config : action === "reset_config" ? path.join(project, "bridge.json") : undefined;
+      if (action === "select_config" && (!config || !path.isAbsolute(config))) throw new Error("Select a configuration file.");
+      if (targetConfig && this.dirtyFiles().some(file => projectKey(file) === projectKey(targetConfig))) throw new Error("Resolve unsaved edits in the selected configuration first.");
+      const facts = await this.dataFacts(project, targetConfig);
+      const blockers = [...facts.inventory.blockers, ...(facts.target?.blockers || [])];
+      if (blockers.length) throw new Error(`Inspect saved data and preview again: ${[...new Set(blockers)].join(", ")}`);
+      if (action === "select_config" && facts.target?.config?.status !== "present") throw new Error("Select a valid existing configuration file.");
+      this.dataIdle(project);
+      if (epoch !== this.dataEpoch) throw new Error("The preview was cancelled.");
+      const plan = planProject(this.router.board, this.savedConfigs, project, action, facts.revision, config);
+      this.dataPlan = plan; this.dataView = { state: "ready", project, inventory: facts.inventory, plan };
+      return structuredClone(plan);
+    } catch (error) { this.dataView = { state: "error", project, error: String(error) }; throw error; }
+    finally { this.dataBusy = false; this.flushDataChanges(); this.publishData(); }
+  }
+  cancelProjectData(): void { this.dataEpoch++; this.dataPlan = undefined; this.dataView = { ...this.dataView, plan: undefined }; this.publishData(); }
+  async applyProjectData(confirm = true): Promise<any> {
+    if (this.bodyBusy || this.bodyPlan) throw new Error("Finish task body management first.");
+    const plan = this.dataPlan;
+    if (!plan || this.dataBusy || this.stateStore.pending) throw new Error("Create a new configuration preview.");
+    this.dataProject(plan.project); this.dataIdle(plan.project);
+    if (confirm && await vscode.window.showWarningMessage("Apply the reviewed configuration change in this workspace?", { modal: true, detail: `Cards: ${plan.report.cards} - routes: ${plan.report.connections} removed. Configuration: ${plan.report.config ?? "Disconnect"}. Records, files, profiles and group limits are preserved.` }, "Apply") !== "Apply") return;
+    if (this.dataPlan?.id !== plan.id) throw new Error("The preview changed.");
+    this.dataBusy = true; this.dataPlan = undefined; ++this.dataEpoch;
+    if (this.saveTimer) { clearTimeout(this.saveTimer); this.saveTimer = undefined; }
+    this.dataView = { ...this.dataView, state: "loading", plan: undefined }; this.publishData();
+    try {
+      await this.mirrorChain;
+      const targetConfig = plan.action === "select_config" ? plan.config : plan.action === "reset_config" ? path.join(plan.project, "bridge.json") : undefined;
+      const facts = await this.dataFacts(plan.project, targetConfig);
+      this.dataProject(plan.project); this.dataIdle(plan.project);
+      if (targetConfig && this.dirtyFiles().some(file => projectKey(file) === projectKey(targetConfig))) throw new Error("The selected configuration now has unsaved edits.");
+      validateDataPlan(plan, this.router.board, this.savedConfigs, facts.revision);
+      const next = changedProject(this.router.board, this.savedConfigs, plan.project, plan.action, plan.config);
+      const snapshot = this.stateStore.beginManagement(next.board, next.configs, this.context.extension.packageJSON.version, { id: plan.id, project: plan.project, action: plan.action, removed: next.removed });
+      this.router.board = next.board; this.savedConfigs = next.configs;
+      for (const id of next.removed) { this.router.runtime.delete(id); this.outputBatches.delete(id); }
+      this.ledger.forget(plan.project); this.coreView = { state: "idle", project: plan.project }; this.cancelRecords();
+      await this.mirrorSnapshot(snapshot); this.stateStore.finishManagement(plan.id); this.persistenceError = "";
+      this.dataView = { state: "ready", project: plan.project, result: { operation: plan.id, action: plan.action, cardsRemoved: next.removed.length, recordsPreserved: true } };
+      return this.dataView.result;
+    } catch (error) { this.dataView = { state: "error", project: plan.project, error: String(error) }; throw error; }
+    finally { this.dataBusy = false; this.flushDataChanges(); this.publishData(); }
+  }
+  async resumeProjectData(): Promise<void> {
+    const pending = this.stateStore.pending;
+    if (!pending || this.dataBusy) throw new Error("There is no configuration change to finalize.");
+    this.dataProject(pending.project); this.dataIdle(pending.project); this.dataBusy = true;
+    try { await this.mirrorSnapshot(this.stateStore.snapshot()!); this.stateStore.finishManagement(pending.id); this.persistenceError = ""; this.dataView = { state: "ready", project: pending.project, result: { operation: pending.id, resumed: true, recordsPreserved: true } }; }
+    catch (error) { this.dataView = { state: "error", project: pending.project, error: String(error) }; throw error; }
+    finally { this.dataBusy = false; this.flushDataChanges(); this.publishData(); }
+  }
+  private flushDataChanges(): void { if (this.dataDirty && !this.stateStore.pending) { this.dataDirty = false; this.saveState(); } }
+  private async selectDataConfig(project: string): Promise<boolean> {
+    project = this.dataProject(project);
+    this.cancelProjectData(); const epoch = this.dataEpoch;
+    const files = await vscode.window.showOpenDialog({ canSelectMany: false, filters: { "Bridge configuration": ["json"] } });
+    if (!files?.[0] || epoch !== this.dataEpoch) return false;
+    await this.previewProjectData(project, "select_config", files[0].fsPath); return true;
   }
   private requireWorkspace(): void {
     if (!vscode.workspace.isTrusted) throw new Error("Trust the VS Code workspace before starting terminals.");
@@ -122,6 +297,8 @@ class Controller implements vscode.TreeDataProvider<vscode.TreeItem>, vscode.Dis
   private async refreshCore(project: string, config?: string, days?: number, groupBy = "endpoint"): Promise<void> {
     project = this.projects().find(p => projectKey(p) === projectKey(project)) || project;
     this.requireWorkspace(); if (!this.projects().includes(project)) throw new Error("Select an open project.");
+    if (this.detached(project)) { this.coreView = { state: "detached", project }; this.publishData(); return; }
+    this.requireAttached(project); this.coreReads++;
     this.coreView = { state: "loading", project }; this.changed();
     try {
       const binding = await this.ledger.inspect(project, config || this.selectedConfig(project));
@@ -134,6 +311,373 @@ class Controller implements vscode.TreeDataProvider<vscode.TreeItem>, vscode.Dis
       this.coreView = { state: "ready", project, binding, tasks, usage, history, days, groupBy };
       this.changed();
     } catch (error) { this.coreView = { state: "error", project, error: String(error) }; this.changed(); }
+    finally { this.coreReads--; }
+  }
+  private historyIdle(project: string): void {
+    if (this.bodyBusy || this.bodyPlan) throw new Error("Discard the task body preview before managing conversation bodies.");
+    this.dataProject(project);
+    if (this.dataBusy || this.stateStore.pending || this.dataPlan || this.detached(project)) throw new Error("Finish configuration changes and attachment first.");
+    this.dataIdle(project);
+  }
+  cancelRecords(): void { this.recordsRevision++; this.recordsView = { state: "idle" }; void this.cancelRecordBody(); this.publishData(); }
+  private bodyIdle(project: string): void {
+    this.dataProject(project);
+    if (this.dataBusy || this.dataPlan || this.stateStore.pending || this.detached(project) || this.historyBusy || this.historyPlan) throw new Error("Finish other configuration/body work and previews first.");
+    this.dataIdle(project);
+  }
+  private connectionIdle(project: string): void {
+    this.dataProject(project); this.dataIdle(project, true);
+    if (this.dataBusy || this.dataPlan || this.historyBusy || this.historyPlan || this.bodyBusy || this.bodyPlan) throw new Error("Finish other data/body work first.");
+  }
+  private cleanupIdle(project: string): void {
+    this.dataProject(project); this.dataIdle(project, false, true);
+    if (this.dataBusy || this.dataPlan || this.historyBusy || this.historyPlan || this.bodyBusy || this.bodyPlan || this.connectionBusy || this.connectionPlan) throw new Error("Finish other data/body/connection work first.");
+  }
+  async cancelCleanup(): Promise<void> {
+    this.cleanupEpoch++; const plan = this.cleanupPlan; this.cleanupPlan = undefined;
+    if (plan) await this.core.request("cleanup.cancel", { plan_id: plan.id }).catch(() => {});
+    this.cleanupView = { ...this.cleanupView, plan: false, preview: undefined }; this.publishData();
+  }
+  async cleanupInventory(project: string): Promise<any> {
+    project = this.dataProject(project); this.cleanupIdle(project);
+    if (this.cleanupBusy) throw new Error("Project cleanup is in progress.");
+    this.cleanupBusy = true;
+    try {
+      await this.cancelCleanup();
+      if ((await this.core.request("capabilities")).project_cleanup_schema !== 1) throw new Error("A core with guided project cleanup is required.");
+      const inventory = await this.core.request("cleanup.inventory", { project, config: this.selectedConfig(project) || path.join(project, "bridge.json"), ...(this.cleanupReceipt?.project === project ? { database: this.cleanupReceipt.database } : {}), databases: await this.ledger.candidates(project), known_configs: this.projects().filter(p => !this.detached(p)).map(p => this.selectedConfig(p) || path.join(p, "bridge.json")) });
+      const pending = inventory.operations?.find((item: any) => item.phase !== "DONE") || inventory.operations?.[0];
+      if (pending) { this.cleanupReceipt = { project, database: inventory.database, operation: pending.operation }; await this.context.workspaceState.update("cleanup.receipt.v1", this.cleanupReceipt); }
+      this.cleanupView = { state: "ready", project, inventory }; return inventory;
+    } catch (error) { this.cleanupView = { state: "error", project, error: String(error) }; throw error;
+    } finally { this.cleanupBusy = false; this.publishData(); }
+  }
+  private cleanupFiles(project: string, report: any): void {
+    const next = report.next_report || {};
+    if (report.next_kind === "connection") this.connectionDirty(project, next.paths || []);
+    if (["tasks", "flow"].includes(report.next_kind)) this.recordBodyFiles(project, path.dirname(report.database), next);
+  }
+  async previewCleanup(project: string, selection?: any): Promise<any> {
+    project = this.dataProject(project); this.cleanupIdle(project);
+    if (this.cleanupBusy || this.stateStore.pending) throw new Error("Finish active work and configuration persistence first.");
+    this.cleanupBusy = true; this.publishData();
+    try {
+      await this.cancelCleanup(); const epoch = this.cleanupEpoch;
+      if (!selection && this.cleanupReceipt?.project !== project) throw new Error("Query this project's cleanup result first.");
+      const args = selection ? { project, config: this.selectedConfig(project) || path.join(project, "bridge.json"), selection, databases: await this.ledger.candidates(project), known_configs: this.projects().filter(p => !this.detached(p)).map(p => this.selectedConfig(p) || path.join(p, "bridge.json")) } : this.cleanupReceipt!;
+      const preview = await this.core.request(selection ? "cleanup.preview" : "cleanup.next.preview", args);
+      if (epoch !== this.cleanupEpoch) { if (preview.plan_id) await this.core.request("cleanup.cancel", { plan_id: preview.plan_id }); throw new Error("Selection changed. Create a new preview."); }
+      if (preview.plan_id) this.cleanupPlan = { id: preview.plan_id, project, database: preview.report.database, report: preview.report, expires: Date.now() + preview.expires_in * 1000 };
+      if (preview.plan_id) this.cleanupFiles(project, preview.report);
+      this.cleanupIdle(project); this.cleanupView = { state: "ready", project, inventory: this.cleanupView.inventory, preview: preview.report, plan: Boolean(this.cleanupPlan) }; return preview;
+    } catch (error) { await this.cancelCleanup(); this.cleanupView = { state: "error", project, error: String(error) }; throw error;
+    } finally { this.cleanupBusy = false; this.publishData(); }
+  }
+  private cleanupEffects(project: string, result: any): void {
+    for (const effect of result.history_effects || []) this.clearHistoryBodies(project, { kind: "purge", body_deleted: true, ...effect });
+    this.clearRecordCaches(project, []);
+  }
+  async applyCleanup(confirm = true): Promise<any> {
+    const plan = this.cleanupPlan;
+    if (!plan || this.cleanupBusy || Date.now() >= plan.expires) throw new Error("Preview the project cleanup stage again.");
+    this.cleanupIdle(plan.project); this.cleanupFiles(plan.project, plan.report);
+    if (confirm && await vscode.window.showWarningMessage("Apply this one reviewed cleanup stage?", { modal: true, detail: "Only selected scope is processed. Review the next stage separately. Ledgers, IDs, usage, originals and backups are preserved; settings are removed last." }, " hops Apply") !== " hops Apply") return;
+    if (this.cleanupPlan?.id !== plan.id) throw new Error("The preview changed.");
+    this.cleanupIdle(plan.project); this.cleanupFiles(plan.project, plan.report);
+    this.cleanupBusy = true; this.cleanupPlan = undefined; this.cleanupEpoch++;
+    this.cleanupView = { state: "loading", project: plan.project }; this.publishData();
+    try {
+      this.cleanupReceipt = { project: plan.project, database: plan.database, operation: plan.report.operation || plan.id };
+      await this.context.workspaceState.update("cleanup.receipt.v1", this.cleanupReceipt);
+      if (plan.report.next_kind === "connection") await this.connectionWorkspace(plan.project, { reconnected: false });
+      this.clearRecordCaches(plan.project, []);
+      const result = await this.core.request("cleanup.apply", { plan_id: plan.id, apply: true });
+      this.cleanupEffects(plan.project, result); this.cleanupView = { state: "ready", project: plan.project, result }; return result;
+    } catch (error) {
+      const result = (error as { result?: any }).result;
+      if (result) this.cleanupEffects(plan.project, result);
+      this.cleanupView = { state: "error", project: plan.project, result, error: `${String(error)} - query the cleanup result. No automatic reapplication.` };
+      await this.core.request("cleanup.cancel", { plan_id: plan.id }).catch(() => {}); throw error;
+    } finally { this.cleanupBusy = false; this.flushDataChanges(); this.publishData(); }
+  }
+  async cleanupOperation(): Promise<any> {
+    const receipt = this.cleanupReceipt;
+    if (!receipt || this.cleanupBusy) throw new Error("Discover the cleanup receipt first.");
+    this.cleanupIdle(receipt.project); this.cleanupBusy = true;
+    try {
+      const result = await this.core.request("cleanup.operation", receipt); this.cleanupEffects(receipt.project, result);
+      if (result.connection_removed === true) await this.connectionWorkspace(receipt.project, { reconnected: false });
+      this.cleanupView = { state: "ready", project: receipt.project, result }; return result;
+    } finally { this.cleanupBusy = false; this.publishData(); }
+  }
+  async cancelConnection(): Promise<void> {
+    this.connectionEpoch++; const plan = this.connectionPlan; this.connectionPlan = undefined;
+    if (plan) await this.core.request("connection.cancel", { plan_id: plan.id }).catch(() => {});
+    this.connectionView = { ...this.connectionView, plan: false, preview: undefined }; this.publishData();
+  }
+  async connectionInventory(project: string): Promise<any> {
+    project = this.dataProject(project); this.connectionIdle(project);
+    if (this.connectionBusy) throw new Error("Connection-file work is in progress.");
+    this.connectionBusy = true;
+    try {
+      await this.cancelConnection();
+      const capability = await this.core.request("capabilities");
+      if (capability.connection_remove_schema !== 1) throw new Error("A core with connection-file management is required.");
+      const inventory = await this.core.request("connection.inventory", { project, config: this.selectedConfig(project) || path.join(project, "bridge.json"), databases: await this.ledger.candidates(project), known_configs: this.projects().filter(p => !this.detached(p)).map(p => this.selectedConfig(p) || path.join(p, "bridge.json")) });
+      if (inventory.receipt) { this.connectionReceipt = { ...inventory.receipt, project }; await this.context.workspaceState.update("connection.receipt.v1", this.connectionReceipt); }
+      this.connectionView = { state: "ready", project, inventory }; return inventory;
+    } catch (error) { this.connectionView = { state: "error", project, error: String(error) }; throw error; }
+    finally { this.connectionBusy = false; this.publishData(); }
+  }
+  private connectionDirty(project: string, paths: string[]): void {
+    if (dirtyConflicts([project], paths, this.dirtyFiles()).length) throw new Error("Files to remove have unsaved edits. Save or revert them first.");
+  }
+  async previewConnection(project: string, action: string, paths: string[] = []): Promise<any> {
+    project = this.dataProject(project); this.connectionIdle(project);
+    if (this.connectionBusy || this.stateStore.pending || !["remove", "resume", "reconnect"].includes(action)) throw new Error("Finish configuration persistence and active work first.");
+    this.connectionBusy = true; this.publishData();
+    try {
+      await this.cancelConnection(); const epoch = this.connectionEpoch;
+      if (action !== "remove" && this.connectionReceipt?.project !== project) throw new Error("Inspect this project's connection files and receipt first.");
+      this.connectionDirty(project, paths);
+      const args = action === "remove" ? { project, config: this.selectedConfig(project) || path.join(project, "bridge.json"), paths, databases: await this.ledger.candidates(project), known_configs: this.projects().filter(p => !this.detached(p)).map(p => this.selectedConfig(p) || path.join(p, "bridge.json")) } : this.connectionReceipt!;
+      const preview = await this.core.request(`connection.${action}.preview`, args);
+      if (epoch !== this.connectionEpoch) { if (preview.plan_id) await this.core.request("connection.cancel", { plan_id: preview.plan_id }); throw new Error("Selection changed. Create a new preview."); }
+      if (preview.plan_id) this.connectionPlan = { id: preview.plan_id, project, database: preview.report.database, report: preview.report, expires: Date.now() + preview.expires_in * 1000 };
+      this.connectionDirty(project, preview.report.paths || []); this.connectionIdle(project);
+      this.connectionView = { state: "ready", project, inventory: this.connectionView.inventory, preview: preview.report, plan: Boolean(this.connectionPlan) }; return preview;
+    } catch (error) { await this.cancelConnection(); this.connectionView = { state: "error", project, error: String(error) }; throw error; }
+    finally { this.connectionBusy = false; this.publishData(); }
+  }
+  private async connectionWorkspace(project: string, result: any): Promise<void> {
+    const action = result.reconnected ? "select_config" : "disconnect";
+    if (!result.reconnected && this.detached(project) && !this.stateStore.pending) return;
+    if (this.stateStore.pending) throw new Error("Finalize configuration persistence, then query the connection result again.");
+    if (this.saveTimer) { clearTimeout(this.saveTimer); this.saveTimer = undefined; }
+    await this.mirrorChain;
+    const next = changedProject(this.router.board, this.savedConfigs, project, action, result.config);
+    const id = randomUUID();
+    const snapshot = this.stateStore.beginManagement(next.board, next.configs, this.context.extension.packageJSON.version, { id, project, action, removed: next.removed });
+    this.router.board = next.board; this.savedConfigs = next.configs; this.dataEpoch++; this.dataView = { state: "idle", project }; this.ledger.forget(project); this.clearRecordCaches(project, []);
+    await this.mirrorSnapshot(snapshot); this.stateStore.finishManagement(id); this.persistenceError = "";
+  }
+  async applyConnection(confirm = true): Promise<any> {
+    const plan = this.connectionPlan;
+    if (!plan || this.connectionBusy || Date.now() >= plan.expires) throw new Error("Create a new connection-file preview.");
+    this.connectionIdle(plan.project); this.connectionDirty(plan.project, plan.report.paths || []);
+    const reconnect = plan.report.kind === "reconnect";
+    if (confirm && await vscode.window.showWarningMessage(reconnect ? "Release connection execution protection with this configuration?" : "Remove the selected files and detach the connection?", { modal: true, detail: reconnect ? "Deleted files are not restored; tasks and AI are not started automatically." : "Only selected files are removed, with settings last. Ledgers, IDs, usage, backups and other projects are preserved. Older writers are blocked; interruption requires explicit resume." }, "Apply") !== "Apply") return;
+    if (this.connectionPlan?.id !== plan.id) throw new Error("The preview changed.");
+    this.connectionIdle(plan.project); this.connectionDirty(plan.project, plan.report.paths || []);
+    this.connectionBusy = true; this.connectionPlan = undefined; this.connectionEpoch++;
+    this.connectionView = { state: "loading", project: plan.project }; this.publishData();
+    try {
+      this.connectionReceipt = { project: plan.project, database: plan.database, operation: plan.report.operation || plan.id };
+      await this.context.workspaceState.update("connection.receipt.v1", this.connectionReceipt);
+      if (!reconnect) await this.connectionWorkspace(plan.project, { reconnected: false });
+      const result = await this.core.request("connection.apply", { plan_id: plan.id, apply: true });
+      this.connectionView = { state: "ready", project: plan.project, result };
+      if (reconnect) await this.connectionWorkspace(plan.project, result);
+      return result;
+    } catch (error) {
+      const result = (error as { result?: any }).result || this.connectionView.result;
+      this.connectionView = { state: "error", project: plan.project, result, error: `${String(error)} - query the connection result. No automatic retry.` };
+      await this.core.request("connection.cancel", { plan_id: plan.id }).catch(() => {}); throw error;
+    } finally { this.connectionBusy = false; this.flushDataChanges(); this.publishData(); }
+  }
+  async connectionOperation(): Promise<any> {
+    const receipt = this.connectionReceipt;
+    if (!receipt || this.connectionBusy) throw new Error("There is no connection-removal receipt to query.");
+    this.connectionIdle(receipt.project); this.connectionBusy = true;
+    try {
+      const result = await this.core.request("connection.operation", receipt);
+      this.connectionView = { state: "ready", project: receipt.project, result };
+      await this.connectionWorkspace(receipt.project, result); return result;
+    } finally { this.connectionBusy = false; this.publishData(); }
+  }
+  async cancelRecordBody(): Promise<void> {
+    this.bodyRevision++; const plan = this.bodyPlan; this.bodyPlan = undefined;
+    if (plan) await this.core.request("records.cancel", { plan_id: plan.id }).catch(() => {});
+    this.bodyView = { ...this.bodyView, plan: false, preview: undefined, result: undefined }; this.publishData();
+  }
+  private recordBodyFiles(project: string, state: string, report: any): void {
+    const roots = report.flow ? [path.join(project, ".role-flows", report.flow)] : (report.task_ids || []).map((id: string) => path.join(state, "workspaces", id));
+    if (report.operation) roots.push(path.join(state, "record-bodies", report.operation));
+    const dirty = this.dirtyFiles();
+    if (dirtyConflicts(roots, ["."], dirty).length || (report.flow && dirty.some(file => [".json", ".txt", ".log"].some(suffix => projectKey(file) === projectKey(path.join(state, "p1-jobs", report.flow + suffix)))))) throw new Error("Bodies/copies to delete have unsaved edits. Save or revert them first.");
+  }
+  async previewRecordBody(project: string, action: string, ids: string[] = []): Promise<any> {
+    project = this.dataProject(project); this.requireAttached(project); this.bodyIdle(project);
+    if (!["prepare", "purge", "resume", "roles.prepare", "flow.purge"].includes(action)) throw new Error("Choose a supported task body action.");
+    this.bodyBusy = true; this.publishData();
+    try {
+      await this.cancelRecordBody(); const revision = this.bodyRevision;
+      const capability = await this.core.request("capabilities");
+      if (capability.records_body_schema !== 1) throw new Error("A core with task body management is required.");
+      if (["roles.prepare", "flow.purge", "resume"].includes(action) && capability.records_flow_schema !== 1) throw new Error("A core with role body management is required.");
+      if (action === "flow.purge" && (ids.length !== 1 || !ids[0])) throw new Error("Explicitly select one flow.");
+      const binding = await this.ledger.inspect(project, this.selectedConfig(project));
+      if (!binding.linked || !binding.state) throw new Error("Attach an existing bridge.json first.");
+      const known = this.projects().filter(p => !this.detached(p)).map(p => this.selectedConfig(p) || path.join(p, "bridge.json"));
+      if (known.length > 16) throw new Error("Reduce scope to at most 16 known configurations.");
+      if (action === "resume" && this.bodyReceipt?.project !== project) throw new Error("Discover this project's interrupted operation first.");
+      const result = await this.core.request(`records.${action}.preview`, { project, config: binding.config, known_configs: known, ...(action === "flow.purge" ? { flow_id: ids[0] } : action === "purge" ? { task_ids: ids } : action === "resume" ? { operation: this.bodyReceipt!.operation } : {}) });
+      if (revision !== this.bodyRevision) { if (result.plan_id) await this.core.request("records.cancel", { plan_id: result.plan_id }); throw new Error("Selection changed. Create a new preview."); }
+      if (result.plan_id) this.bodyPlan = { id: result.plan_id, project, config: binding.config, database: path.join(binding.state, "queue.sqlite3"), report: result.report, expires: Date.now() + result.expires_in * 1000 };
+      this.recordBodyFiles(project, binding.state, result.report);
+      this.bodyIdle(project);
+      this.bodyView = { state: "ready", project, plan: Boolean(this.bodyPlan), preview: result.report }; return result;
+    } catch (error) { await this.cancelRecordBody(); this.bodyView = { state: "error", project, error: String(error) }; throw error; }
+    finally { this.bodyBusy = false; this.publishData(); }
+  }
+  private clearRecordCaches(project: string, ids: string[]): void {
+    if (projectKey(this.coreView.project || "") === projectKey(project)) this.coreView = { state: "idle", project };
+    if (projectKey(this.workflowView.project || "") === projectKey(project)) this.workflowView = { state: "idle", project };
+    this.recordsRevision++; this.recordsView = { state: "ready", project, kind: "task" };
+    this.post({ type: "recordsPurged", project, taskIds: ids });
+  }
+  async applyRecordBody(confirm = true): Promise<any> {
+    const plan = this.bodyPlan;
+    if (!plan || this.bodyBusy || Date.now() >= plan.expires) throw new Error("Create a new task body preview.");
+    this.bodyIdle(plan.project);
+    this.recordBodyFiles(plan.project, path.dirname(plan.database), plan.report);
+    const detail = plan.report.kind === "roles_prepare" ? "Enable role protection. Older cores cannot use this ledger. Only new shared flows become manageable; existing IDs, usage and limits remain." : plan.report.kind === "prepare" ? "Prepare ordinary-task protection. Existing records/copies stay read-only and are not adopted for deletion. Older writers and role starts are blocked; execution logs retain progress rather than bodies." : `${plan.report.flow ? `flow ${plan.report.flow} in full - ` : ""}Tasks: ${plan.report.tasks}${plan.report.files === undefined ? "" : ` - files: ${plan.report.files}`}. Bodies/copies${plan.report.flow ? "/archives/receipt bodies" : ""} cannot be recovered. Usage, limits, IDs and originals remain. Resume only remaining I/O after interruption.`;
+    const question = plan.report.kind === "roles_prepare" ? "Prepare role ledger protection?" : plan.report.kind === "prepare" ? "Prepare ordinary-task ledger protection?" : ["resume", "flow_resume"].includes(plan.report.kind) ? "Continue interrupted body deletion?" : plan.report.flow ? "Delete the selected flow's complete bodies?" : "Delete selected ordinary-task bodies and copies?";
+    if (confirm && await vscode.window.showWarningMessage(question, { modal: true, detail }, "Apply") !== "Apply") return;
+    if (this.bodyPlan?.id !== plan.id) throw new Error("The body preview changed.");
+    this.recordBodyFiles(plan.project, path.dirname(plan.database), plan.report);
+    this.bodyIdle(plan.project); this.bodyBusy = true; this.bodyPlan = undefined; this.bodyRevision++;
+    this.bodyView = { state: "loading", project: plan.project, plan: false }; this.publishData();
+    try {
+      this.bodyReceipt = { project: plan.project, database: plan.database, operation: plan.report.operation || plan.id };
+      await this.context.workspaceState.update("records.receipt.v1", this.bodyReceipt);
+      if (!["prepare", "roles_prepare"].includes(plan.report.kind)) this.clearRecordCaches(plan.project, plan.report.task_ids || []);
+      const result = await this.core.request("records.apply", { plan_id: plan.id, apply: true });
+      this.bodyView = { state: "ready", project: plan.project, result }; return result;
+    } catch (error) {
+      const result = (error as { result?: any }).result;
+      await this.core.request("records.cancel", { plan_id: plan.id }).catch(() => {});
+      this.bodyView = { state: "error", project: plan.project, result, error: `${String(error)} - query the recorded result. No automatic retry.` }; throw error;
+    } finally { this.bodyBusy = false; this.publishData(); }
+  }
+  async recordBodyOperation(): Promise<any> {
+    const receipt = this.bodyReceipt;
+    if (!receipt || this.bodyBusy) throw new Error("There is no task body operation to query.");
+    this.dataProject(receipt.project); this.bodyBusy = true; this.publishData();
+    try {
+      const result = await this.core.request("records.operation", receipt);
+      if (result.found && ["purge", "flow_purge"].includes(result.kind)) this.clearRecordCaches(receipt.project, result.task_ids || []);
+      this.bodyView = { state: "ready", project: receipt.project, result }; return result;
+    } catch (error) { this.bodyView = { state: "error", project: receipt.project, error: String(error) }; throw error;
+    } finally { this.bodyBusy = false; this.publishData(); }
+  }
+  async discoverRecordBody(project: string): Promise<any> {
+    project = this.dataProject(project); this.requireAttached(project); this.bodyBusy = true; this.publishData();
+    try {
+      const binding = await this.ledger.inspect(project, this.selectedConfig(project));
+      if (!binding.linked || !binding.state) throw new Error("Attach the original configuration before discovering interrupted work.");
+      const listed = await this.core.request("records.inventory", { project, config: binding.config, kind: "task", limit: 1 });
+      if (listed.pending_body_operations?.length !== 1) throw new Error("The current ledger does not identify one interrupted operation.");
+      this.bodyReceipt = { project, database: path.join(binding.state, "queue.sqlite3"), operation: listed.pending_body_operations[0].operation };
+      await this.context.workspaceState.update("records.receipt.v1", this.bodyReceipt);
+      const result = await this.core.request("records.operation", this.bodyReceipt);
+      this.clearRecordCaches(project, result.task_ids || []); this.bodyView = { state: "ready", project, result }; return result;
+    } catch (error) { this.bodyView = { state: "error", project, error: String(error) }; throw error;
+    } finally { this.bodyBusy = false; this.publishData(); }
+  }
+  async records(project: string, kind = "task", recordId?: string, cursor = ""): Promise<any> {
+    project = this.dataProject(project); this.requireAttached(project);
+    if (this.workflowBusy) throw new Error("Finish active work before inspecting references.");
+    if (!["task", "flow"].includes(kind)) throw new Error("Select a task or flow.");
+    const revision = ++this.recordsRevision;
+    const previous = this.recordsView.project === project && this.recordsView.kind === kind ? this.recordsView.list : undefined;
+    this.recordsView = { state: "loading", project, kind, list: recordId ? previous : undefined }; this.publishData(); this.coreReads++; this.recordsReads++;
+    try {
+      const capabilities = await this.core.request("capabilities");
+      if (capabilities.records_schema !== 1) throw new Error("A core with reference inspection is required.");
+      const known = this.projects().filter(p => !this.detached(p)).map(p => this.selectedConfig(p) || path.join(p, "bridge.json"));
+      if (known.length > 16) throw new Error("More than 16 open configurations. Reduce the workspace inspection scope.");
+      const result = await this.core.request(recordId ? "records.inspect" : "records.inventory", { project, config: this.selectedConfig(project) || path.join(project, "bridge.json"), kind, cursor, limit: 25, known_configs: known, ...(recordId ? { record_id: recordId } : {}) });
+      if (revision !== this.recordsRevision) return result;
+      this.recordsView = { state: "ready", project, kind, list: recordId ? previous : result, detail: recordId ? result : undefined, recordId };
+      return result;
+    } catch (error) { if (revision === this.recordsRevision) this.recordsView = { state: "error", project, kind, error: String(error) }; throw error; }
+    finally { this.coreReads--; this.recordsReads--; this.publishData(); }
+  }
+  async cancelHistory(): Promise<void> {
+    this.historyRevision++;
+    const plan = this.historyPlan; this.historyPlan = undefined;
+    if (plan) await this.core.request("history.cancel", { plan_id: plan.id }).catch(() => {});
+    this.historyView = { ...this.historyView, plan: false, preview: undefined }; this.publishData();
+  }
+  async history(project: string, action = "list", sessionIds: string[] = [], cursor = ""): Promise<any> {
+    project = this.dataProject(project); this.requireAttached(project);
+    if (!["list", "prepare", "purge"].includes(action) || this.historyBusy) throw new Error("Choose a supported body management action.");
+    if (action !== "list") this.historyIdle(project);
+    this.historyBusy = true;
+    if (action === "list") this.historyView = { state: "loading", project };
+    this.publishData();
+    try {
+      await this.cancelHistory(); const revision = this.historyRevision;
+      const binding = await this.ledger.inspect(project, this.selectedConfig(project));
+      const capabilities = await this.core.request("capabilities");
+      if (capabilities.history_schema !== 1 || capabilities.interactive_writer_protocol !== 2) throw new Error("A core with conversation body management is required.");
+      const args = { database: binding.database, project };
+      const result = await this.core.request(action === "list" ? "history.list" : `history.${action}.preview`, { ...args, ...(action === "list" ? { cursor, limit: 25 } : action === "purge" ? { session_ids: sessionIds } : {}) });
+      if (revision !== this.historyRevision) { if (result.plan_id) await this.core.request("history.cancel", { plan_id: result.plan_id }); throw new Error("Selection changed. Inspect again."); }
+      if (result.plan_id) this.historyPlan = { id: result.plan_id, project, database: binding.database, config: binding.config, report: result.report, expires: Date.now() + result.expires_in * 1000 };
+      if (action !== "list") this.historyIdle(project);
+      this.historyView = { ...(this.historyView.project === project ? this.historyView : {}), state: "ready", project, database: binding.database, error: undefined, plan: Boolean(this.historyPlan), expires: this.historyPlan?.expires, ...(action === "list" ? { list: result, preview: undefined, result: undefined } : { preview: result.report, result: undefined }) };
+      return result;
+    } catch (error) { await this.cancelHistory(); this.historyView = { ...this.historyView, project, state: "error", error: String(error) }; throw error; }
+    finally { this.historyBusy = false; this.publishData(); }
+  }
+  private clearHistoryBodies(project: string, result: any): void {
+    if (result.kind !== "purge" || !result.body_deleted) return;
+    const nodes = new Set<string>((result.node_ids || []).filter((id: string) => {
+      const node = this.router.board.nodes.find(n => n.id === id);
+      return (!node || projectKey(node.project) === projectKey(project)) && !this.host.isActive(id) && !this.starting.has(id);
+    })), deliveries = new Set<string>(result.delivery_ids || []);
+    for (const id of nodes) { const runtime = this.router.runtime.get(id); if (runtime) { runtime.lastMessage = ""; runtime.reason = ""; } this.outputBatches.delete(id); }
+    for (let index = this.router.deliveries.length - 1; index >= 0; index--) if (deliveries.has(this.router.deliveries[index].id)) this.router.deliveries.splice(index, 1);
+    for (const id of deliveries) this.deliverySnapshots.delete(id);
+    if (projectKey(this.coreView.project || "") === projectKey(project)) this.coreView = { state: "idle", project };
+    this.historyView = { state: "ready", project, result };
+    this.post({ type: "historyPurged", nodes: [...nodes], deliveries: [...deliveries], project });
+  }
+  async applyHistory(confirm = true): Promise<any> {
+    const plan = this.historyPlan;
+    if (!plan || this.historyBusy || Date.now() >= plan.expires) throw new Error("Create a new body management preview.");
+    this.historyIdle(plan.project);
+    const detail = plan.report.kind === "prepare" ? "Stop all older managed terminals. Existing records remain and are not adopted for deletion. Older extensions cannot write to this ledger after preparation." : `Sessions: ${plan.report.sessions} - events: ${plan.report.events} files - Delivery ${plan.report.deliveries}. Bodies and provider resume information are removed. Usage, delivery counts, IDs and provider originals remain. No body backup is created.`;
+    if (confirm && await vscode.window.showWarningMessage(plan.report.kind === "prepare" ? "Prepare conversation ledger protection?" : "Delete selected conversation bodies?", { modal: true, detail }, "Apply") !== "Apply") return;
+    if (this.historyPlan?.id !== plan.id) throw new Error("The preview changed.");
+    this.historyIdle(plan.project); this.historyBusy = true; this.historyPlan = undefined; this.historyRevision++;
+    this.historyView = { ...this.historyView, state: "loading", plan: false }; this.publishData();
+    try {
+      const binding = await this.ledger.inspect(plan.project, this.selectedConfig(plan.project));
+      if (projectKey(binding.database) !== projectKey(plan.database) || projectKey(binding.config) !== projectKey(plan.config)) throw new Error("Ledger binding changed. Create a new preview.");
+      this.historyIdle(plan.project);
+      this.historyReceipt = { project: plan.project, database: plan.database, operation: plan.id };
+      await this.context.workspaceState.update("history.receipt.v1", this.historyReceipt);
+      const result = await this.core.request("history.apply", { plan_id: plan.id, apply: true });
+      this.clearHistoryBodies(plan.project, result);
+      this.historyView = { state: "ready", project: plan.project, result };
+      return result;
+    } catch (error) {
+      await this.core.request("history.cancel", { plan_id: plan.id }).catch(() => {});
+      this.historyView = { state: "error", project: plan.project, error: `${String(error)} - query the completion receipt. No automatic retry.` }; throw error;
+    } finally { this.historyBusy = false; this.publishData(); }
+  }
+  async historyOperation(): Promise<any> {
+    const receipt = this.historyReceipt;
+    if (!receipt || this.historyBusy) throw new Error("There is no body management operation to query.");
+    this.dataProject(receipt.project); this.historyBusy = true; this.publishData();
+    try {
+      const result = await this.core.request("history.operation", receipt);
+      this.clearHistoryBodies(receipt.project, result);
+      this.historyView = { state: "ready", project: receipt.project, result }; return result;
+    } finally { this.historyBusy = false; this.publishData(); }
   }
   private dirtyFiles(): string[] {
     const files = vscode.workspace.textDocuments.filter(d => d.isDirty && d.uri.scheme === "file").map(d => d.uri.fsPath);
@@ -148,7 +692,10 @@ class Controller implements vscode.TreeDataProvider<vscode.TreeItem>, vscode.Dis
     const roots = [plan.project];
     if (plan.report.workspace) roots.push(path.join(plan.report.workspace, "project"));
     if (plan.args.backup && plan.report.workspace) roots.push(path.join(plan.report.workspace, plan.args.backup));
-    if (plan.action === "roles.prune.preview" && plan.report.workspace && dirtyConflicts([plan.report.workspace], ["."], this.dirtyFiles()).length) throw new Error("The role copy has unsaved edits. Save or revert them, then preview again.");
+    const copies = cleanupRoots(plan.action, plan.report);
+    if (copies.length && dirtyConflicts(copies, ["."], this.dirtyFiles()).length) throw new Error("Copies to clean have unsaved edits. Save/review and preview again.");
+    if (copies.length && (this.ledger.isBusy(plan.project) || this.router.board.nodes.some(n => projectKey(n.project) === projectKey(plan.project) && (this.host.isActive(n.id) || this.starting.has(n.id))))) throw new Error("Finish this project's managed terminals and shutdown records first.");
+    if (typeof plan.args.config === "string" && this.dirtyFiles().some(file => projectKey(file) === projectKey(plan.args.config))) throw new Error("Resolve unsaved edits in the selected configuration first.");
     const conflicts = dirtyConflicts(roots, [...paths, "bridge.json"], this.dirtyFiles());
     if (conflicts.length) throw new Error(`Save or revert unsaved edits, then preview again: ${conflicts.join(", ")}`);
   }
@@ -159,8 +706,10 @@ class Controller implements vscode.TreeDataProvider<vscode.TreeItem>, vscode.Dis
   }
   async cancelWorkflow(): Promise<void> { await this.cancelPlan(); this.workflowView = { state: "idle" }; this.changed(); }
   async workflow(project: string, action: string, rawArgs: Record<string, unknown> = {}): Promise<any> {
+    if (this.historyPlan || this.bodyPlan) throw new Error("Discard the body management preview before continuing.");
     project = this.projects().find(p => projectKey(p) === projectKey(project)) || project;
     this.requireWorkspace();
+    this.requireAttached(project);
     if (!this.projects().includes(project) || !workflowActions.has(action)) throw new Error("Select an open project and a supported action.");
     if (this.workflowBusy) throw new Error("A management action is running. Wait for its outcome.");
     this.workflowBusy = true;
@@ -171,6 +720,7 @@ class Controller implements vscode.TreeDataProvider<vscode.TreeItem>, vscode.Dis
       const binding = await this.ledger.inspect(project, this.selectedConfig(project));
       if (!binding.linked) throw new Error("Connect bridge.json first. Select its file in Jobs & usage.");
       const capabilities = await this.core.request("capabilities");
+      if ((action.startsWith("copies.") || action === "roles.prune.preview") && capabilities.copy_cleanup_schema !== 1) throw new Error("This core does not support copy cleanup. Check core/extension versions.");
       if (!capabilities.actions?.includes(action)) throw new Error("This core lacks project workflow features. Install a verified extension build.");
       const args = { ...rawArgs, config: binding.config };
       const result = await this.core.request(action, args);
@@ -186,18 +736,29 @@ class Controller implements vscode.TreeDataProvider<vscode.TreeItem>, vscode.Dis
     finally { this.workflowBusy = false; }
   }
   async applyWorkflow(confirm = true): Promise<any> {
+    if (this.recordsReads) throw new Error("Finish reference inspection before applying.");
     this.requireWorkspace(); const plan = this.workflowPlan;
     if (!plan || this.workflowBusy || Date.now() >= plan.expires) throw new Error("Make a new, valid preview.");
+    this.requireAttached(plan.project);
     this.checkDirty(plan);
-    if (confirm && await vscode.window.showWarningMessage(plan.action === "roles.preview" ? "Start the role workflow? It runs at most two provider tasks and the configured test commands." : "Apply the reviewed preview?", { modal: true, detail: JSON.stringify(plan.report, null, 2).slice(0, 4000) }, "Apply") !== "Apply") return;
+    if (confirm && await vscode.window.showWarningMessage(plan.report.operation === "copy_cleanup" ? "Delete selected task copies and logs. DB answers, usage, lifetime counts and originals remain. Copy deletion cannot be undone." : plan.action === "roles.preview" ? "Start the role workflow? It runs at most two provider tasks and the configured test commands." : "Apply the reviewed preview?", { modal: true, detail: JSON.stringify(plan.report, null, 2).slice(0, 4000) }, "Apply") !== "Apply") return;
     if (this.workflowPlan?.id !== plan.id || !this.projects().includes(plan.project)) throw new Error("The preview changed. Review a new plan.");
+    this.requireAttached(plan.project);
+    if (this.recordsReads) throw new Error("Finish reference inspection before applying.");
     this.checkDirty(plan); this.workflowBusy = true; this.workflowPlan = undefined;
     this.workflowView = { ...this.workflowView, state: "loading", plan: false }; this.changed();
     try {
       const result = await this.core.request("operation.apply", { plan_id: plan.id, apply: true });
+      // A refresh failure must not discard an already confirmed mutation result.
+      await this.refreshCore(plan.project).catch(error => { this.coreView = { state: "error", project: plan.project, error: String(error) }; });
+      if (result.operation === "copy_cleanup") await this.inspectProjectData(plan.project).catch(() => {});
       this.workflowView = { state: "ready", project: plan.project, action: "operation.apply", result, plan: false };
-      await this.refreshCore(plan.project); this.changed(); return result;
-    } catch (error) { this.workflowView = { state: "error", project: plan.project, action: plan.action, plan: false, error: `${String(error)} - inspect results, backups and archives first.` }; this.changed(); throw error; }
+      this.changed(); return result;
+    } catch (error) {
+      const result = (error as { result?: any }).result;
+      if (result?.operation === "copy_cleanup") await this.inspectProjectData(plan.project).catch(() => {});
+      this.workflowView = { state: "error", project: plan.project, action: plan.action, plan: false, result, error: `${String(error)} - inspect results, backups and archives first.` }; this.changed(); throw error;
+    }
     finally { this.workflowBusy = false; }
   }
   private async checkRuntime(): Promise<void> {
@@ -224,6 +785,7 @@ class Controller implements vscode.TreeDataProvider<vscode.TreeItem>, vscode.Dis
   async add(profileId: string, project: string, groupId: string): Promise<string> {
     project = this.projects().find(p => projectKey(p) === projectKey(project)) || project;
     this.requireWorkspace();
+    this.requireAttached(project);
     if (!this.projects().includes(project)) throw new Error("Select a project from the current workspace.");
     const profile = this.profiles().find(p => p.id === profileId); if (!profile) throw new Error("The launch profile was not found.");
     if (this.router.board.nodes.length >= 24) throw new Error("Remove unused terminal cards first.");
@@ -234,11 +796,15 @@ class Controller implements vscode.TreeDataProvider<vscode.TreeItem>, vscode.Dis
     await this.startNode(node, profile); return node.id;
   }
   private async startNode(node: NodeConfig, profile: Profile): Promise<void> {
-    await this.checkRuntime();
-    if (this.runtimeView.state === "error") throw new Error(this.runtimeView.error);
-    await this.refreshCore(node.project);
-    if (this.coreView.state === "error") throw new Error(this.coreView.error);
-    await this.host.start(node, profile);
+    if (this.historyPlan || this.bodyPlan) throw new Error("Discard the body management preview before starting a session.");
+    this.requireAttached(node.project); this.starting.add(node.id);
+    try {
+      await this.checkRuntime();
+      if (this.runtimeView.state === "error") throw new Error(this.runtimeView.error);
+      await this.refreshCore(node.project);
+      if (this.coreView.state === "error") throw new Error(this.coreView.error);
+      this.requireAttached(node.project); await this.host.start(node, profile);
+    } finally { this.starting.delete(node.id); }
   }
   async stopAll(confirm = true): Promise<void> {
     if (confirm && this.host.sessions.size && await vscode.window.showWarningMessage("Stop all terminals started by PatchPort?", { modal: true }, "Stop") !== "Stop") return;
@@ -261,13 +827,45 @@ class Controller implements vscode.TreeDataProvider<vscode.TreeItem>, vscode.Dis
     if (m.type === "corePythonSettings") { await vscode.commands.executeCommand("workbench.action.openSettings", "patchport.corePython"); return; }
     this.requireWorkspace();
     const node = this.router.board.nodes.find(n => n.id === id);
+    if ((this.dataBusy || this.historyBusy || this.bodyBusy) && !["recordBodyCancel", "recordsCancel", "historyCancel", "dataCancel", "input", "interrupt", "stop", "stopAll", "focus", "resize", "activity"].includes(m.type)) throw new Error("Data and settings management is in progress.");
+    if (this.stateStore.pending && !["dataInspect", "dataResume", "dataCancel", "workflowCancel", "runtimeRefresh", "stop", "stopAll", "interrupt"].includes(m.type)) throw new Error("Finalize the previous configuration change in Data & settings.");
     switch (m.type) {
+      case "recordBodyPreview": await this.previewRecordBody(String(m.project), String(m.action), (m.taskIds || []) as string[]); break;
+      case "connectionInventory": await this.connectionInventory(String(m.project)); break;
+      case "cleanupInventory": await this.cleanupInventory(String(m.project)); break;
+      case "cleanupPreview": await this.previewCleanup(String(m.project), m.selection); break;
+      case "cleanupApply": await this.applyCleanup(); break;
+      case "cleanupCancel": await this.cancelCleanup(); break;
+      case "cleanupOperation": await this.cleanupOperation(); break;
+      case "connectionPreview": await this.previewConnection(String(m.project), String(m.action), (m.paths || []) as string[]); break;
+      case "connectionApply": await this.applyConnection(); break;
+      case "connectionCancel": await this.cancelConnection(); break;
+      case "connectionOperation": await this.connectionOperation(); break;
+      case "recordBodyApply": await this.applyRecordBody(); break;
+      case "recordBodyCancel": await this.cancelRecordBody(); break;
+      case "recordBodyOperation": await this.recordBodyOperation(); break;
+      case "recordBodyDiscover": await this.discoverRecordBody(String(m.project)); break;
+      case "recordsList": await this.records(String(m.project), String(m.kind || "task"), undefined, String(m.cursor || "")); break;
+      case "recordsInspect": await this.records(String(m.project), String(m.kind || "task"), String(m.recordId || ""), String(m.cursor || "")); break;
+      case "recordsCancel": this.cancelRecords(); break;
+      case "historyList": await this.history(String(m.project), "list", [], String(m.cursor || "")); break;
+      case "historyPreview": await this.history(String(m.project), String(m.action), m.sessionIds as string[]); break;
+      case "historyApply": await this.applyHistory(); break;
+      case "historyCancel": await this.cancelHistory(); break;
+      case "historyOperation": await this.historyOperation(); break;
+      case "dataInspect": await this.inspectProjectData(String(m.project || this.projects()[0])); break;
+      case "dataPreview": await this.previewProjectData(String(m.project || this.projects()[0]), m.action as DataAction); break;
+      case "dataSelectConfig": await this.selectDataConfig(String(m.project || this.projects()[0])); break;
+      case "dataApply": await this.applyProjectData(); break;
+      case "dataResume": await this.resumeProjectData(); break;
+      case "dataCancel": this.cancelProjectData(); break;
       case "workflow": if (typeof m.project === "string" && typeof m.action === "string" && m.args && typeof m.args === "object") await this.workflow(m.project, m.action, m.args as Record<string, unknown>); break;
       case "workflowApply": await this.applyWorkflow(); break;
       case "workflowCancel": await this.cancelWorkflow(); break;
       case "runtimeRefresh": await this.checkRuntime(); break;
       case "resumeSession": {
         if (typeof m.project !== "string" || !this.projects().includes(m.project) || typeof m.sessionId !== "string") break;
+        this.requireAttached(m.project);
         const binding = await this.ledger.inspect(m.project, this.selectedConfig(m.project));
         const info = await this.core.request("interactive.resume", { database: binding.database, project: binding.project, session_id: m.sessionId });
         const resumed = this.router.board.nodes.find(n => n.id === info.node && n.project === info.project);
@@ -285,9 +883,11 @@ class Controller implements vscode.TreeDataProvider<vscode.TreeItem>, vscode.Dis
       }
       case "runnerControl": {
         const project = String(m.project); if (!this.projects().includes(project)) break;
+        this.requireAttached(project);
         const binding = await this.ledger.inspect(project, this.selectedConfig(project));
         if (!binding.linked || !["start", "stop"].includes(String(m.action))) break;
         if (await vscode.window.showWarningMessage(m.action === "start" ? "Start the queue runner? Pending tasks may execute." : "Stop the selected runner?", { modal: true }, "Apply") !== "Apply") break;
+        this.requireAttached(project); if (this.ledger.binding(project) !== binding) throw new Error("Configuration attachment changed. Inspect again.");
         const status = await this.core.request("runner.status", { config: binding.config });
         const runId = status.management?.run_id;
         const result = await this.core.request(`runner.${m.action}`, { config: binding.config, apply: true, ...(m.action === "stop" ? { run_id: runId, cancel_active: m.cancelActive === true } : {}) });
@@ -296,8 +896,9 @@ class Controller implements vscode.TreeDataProvider<vscode.TreeItem>, vscode.Dis
       case "coreRefresh": await this.refreshCore(String(m.project || this.projects()[0]), undefined, typeof m.days === "number" ? m.days : undefined, typeof m.groupBy === "string" ? m.groupBy : "endpoint"); break;
       case "coreConfig": {
         const project = String(m.project || this.projects()[0]);
-        const files = await vscode.window.showOpenDialog({ canSelectMany: false, filters: { "Bridge configuration": ["json"] } });
-        if (files?.[0]) { await this.refreshCore(project, files[0].fsPath); if (this.coreView.state === "ready") { this.savedConfigs[projectKey(project)] = files[0].fsPath; await this.context.workspaceState.update(`core.config.${projectKey(project)}`, files[0].fsPath); this.changed(); } } break;
+        if (await this.selectDataConfig(project)) await this.applyProjectData();
+        if (!this.dataPlan && !this.detached(project)) await this.refreshCore(project);
+        break;
       }
       case "coreResult": {
         const binding = this.ledger.binding(String(m.project)); if (!binding?.linked || typeof m.taskId !== "string") break;
@@ -317,8 +918,10 @@ class Controller implements vscode.TreeDataProvider<vscode.TreeItem>, vscode.Dis
       }
       case "coreControl": {
         const binding = this.ledger.binding(String(m.project)); if (!binding?.linked || !["pause", "resume", "limit"].includes(String(m.action))) break;
+        this.requireAttached(binding.project);
         const action = String(m.action);
         if (await vscode.window.showWarningMessage("Change existing batch queue controls? These do not limit interactive terminals or token charges.", { modal: true }, "Apply") !== "Apply") break;
+        this.requireAttached(binding.project); if (this.ledger.binding(binding.project) !== binding) throw new Error("Configuration attachment changed. Inspect again.");
         await this.core.request(action, { config: binding.config, apply: true, ...(action === "limit" ? { max_calls: m.maxCalls } : {}) }); await this.refreshCore(binding.project, binding.config, this.coreView.days, this.coreView.groupBy); break;
       }
       case "add": if (typeof m.profileId === "string" && typeof m.project === "string") await this.add(m.profileId, m.project, String(m.groupId || "team")); break;
@@ -377,18 +980,28 @@ class Controller implements vscode.TreeDataProvider<vscode.TreeItem>, vscode.Dis
     const uri = (file: string) => webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, file));
     return `<!doctype html><html lang=\"en\"><head><meta charset=\"UTF-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; img-src ${webview.cspSource} data:; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}'; font-src ${webview.cspSource};\"><link rel=\"stylesheet\" href=\"${uri("dist/xterm.css")}\"><link rel=\"stylesheet\" href=\"${uri("media/board.css")}\"></head><body><div id=\"app\"></div><script nonce=\"${nonce}\" src=\"${uri("dist/webview.js")}\"></script></body></html>`;
   }
-  dispose(): void {
-    if (this.disposed) return;
+  private shutdownPromise?: Promise<void>;
+  shutdown(): Promise<void> {
+    if (this.shutdownPromise) return this.shutdownPromise;
     this.disposed = true; if (this.saveTimer) clearTimeout(this.saveTimer); if (this.stateTimer) clearTimeout(this.stateTimer); if (this.outputTimer) clearTimeout(this.outputTimer);
     this.saveState();
-    this.host.dispose(); void this.ledger.end().catch(() => {}).finally(() => this.core.dispose()); this.panel?.dispose(); this.treeEmitter.dispose(); this.subscriptions.forEach(s => s.dispose());
+    this.panel?.dispose(); this.treeEmitter.dispose(); this.subscriptions.forEach(s => s.dispose());
+    this.shutdownPromise = this.host.shutdown().then(() => this.ledger.end()).catch(() => {}).finally(() => this.core.dispose());
+    return this.shutdownPromise;
   }
+  dispose(): void { void this.shutdown(); }
 }
 
-export function activate(context: vscode.ExtensionContext): { version: string; openBoard(): void; getState(): unknown; refreshProject(project: string): Promise<void>; workflow(project: string, action: string, args?: Record<string, unknown>): Promise<any>; applyWorkflow(): Promise<any>; cancelWorkflow(): Promise<void> } {
+export function activate(context: vscode.ExtensionContext) {
   controller = new Controller(context);
   context.subscriptions.push(controller, vscode.window.registerTreeDataProvider("patchport.sessions", controller));
   for (const [name, action] of Object.entries({ openBoard: () => controller!.open(), addTerminal: () => controller!.showPage("add"), manageProfiles: () => controller!.showPage("profiles"), connectExisting: () => controller!.showPage("external"), stopAll: () => controller!.stopAll() })) context.subscriptions.push(vscode.commands.registerCommand(`patchport.${name}`, action));
-  return { version: context.extension.packageJSON.version, openBoard: () => controller!.open(), getState: () => controller!.getState(), refreshProject: project => controller!.refreshProject(project), workflow: (project, action, args) => controller!.workflow(project, action, args), applyWorkflow: () => controller!.applyWorkflow(false), cancelWorkflow: () => controller!.cancelWorkflow() };
+  return { version: context.extension.packageJSON.version, openBoard: () => controller!.open(), getState: () => controller!.getState(), refreshProject: (project: string) => controller!.refreshProject(project), workflow: (project: string, action: string, args?: Record<string, unknown>) => controller!.workflow(project, action, args), applyWorkflow: () => controller!.applyWorkflow(false), cancelWorkflow: () => controller!.cancelWorkflow(),
+    inspectProjectData: (project: string) => controller!.inspectProjectData(project), previewProjectData: (project: string, action: DataAction, config?: string) => controller!.previewProjectData(project, action, config), applyProjectData: () => controller!.applyProjectData(false), resumeProjectData: () => controller!.resumeProjectData(), cancelProjectData: () => controller!.cancelProjectData(),
+    history: (project: string, action?: string, ids?: string[], cursor?: string) => controller!.history(project, action, ids, cursor), applyHistory: () => controller!.applyHistory(false), cancelHistory: () => controller!.cancelHistory(), historyOperation: () => controller!.historyOperation(),
+    records: (project: string, kind?: string, id?: string, cursor?: string) => controller!.records(project, kind, id, cursor), cancelRecords: () => controller!.cancelRecords(),
+    previewRecordBody: (project: string, action: string, ids?: string[]) => controller!.previewRecordBody(project, action, ids), applyRecordBody: () => controller!.applyRecordBody(false), cancelRecordBody: () => controller!.cancelRecordBody(), recordBodyOperation: () => controller!.recordBodyOperation(), discoverRecordBody: (project: string) => controller!.discoverRecordBody(project),
+    connectionInventory: (project: string) => controller!.connectionInventory(project), previewConnection: (project: string, action: string, paths?: string[]) => controller!.previewConnection(project, action, paths), applyConnection: () => controller!.applyConnection(false), cancelConnection: () => controller!.cancelConnection(), connectionOperation: () => controller!.connectionOperation(),
+    cleanupInventory: (project: string) => controller!.cleanupInventory(project), previewCleanup: (project: string, selection?: any) => controller!.previewCleanup(project, selection), applyCleanup: () => controller!.applyCleanup(false), cancelCleanup: () => controller!.cancelCleanup(), cleanupOperation: () => controller!.cleanupOperation() };
 }
-export function deactivate(): void { controller?.dispose(); controller = undefined; }
+export function deactivate(): Promise<void> | undefined { const work = controller?.shutdown(); controller = undefined; return work; }

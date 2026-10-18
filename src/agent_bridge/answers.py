@@ -13,6 +13,8 @@ def capture(home, state):
 
 def answer_for(result):
     result = result or {}
+    if result.get('body_state') in ('PURGING', 'DELETED'):
+        return dict(text=None, status='BODY_DELETED' if result['body_state']=='DELETED' else 'BODY_PURGE_PENDING')
     if isinstance(result.get("answer"), dict):
         return result["answer"]
     provider = result.get("provider_result")
@@ -36,10 +38,13 @@ def preserve_before_prune(store, row, home):
 
 def concise(row):
     result = row.get("result") or {}
-    return dict(id=row["id"], endpoint=row["endpoint"], state=row["state"],
+    output = dict(id=row["id"], endpoint=row["endpoint"], state=row["state"],
                 task_success=row["task_success"], answer=answer_for(result),
                 error=result.get("error") or result.get("manifest_error"),
                 exit_code=result.get("exit_code"),
                 changes=[{key: item.get(key) for key in ("path", "allowed")}
                          for item in result.get("changes", [])],
                 artifact_cleanup=row["artifact_cleanup"])
+    if result.get('body_state') or row.get('body_state'):
+        output.update(body_state=result.get('body_state',row.get('body_state')),body_deleted=result.get('body_state')=='DELETED')
+    return output
