@@ -6,12 +6,12 @@ const path = require("node:path");
 const { CoreClient, Ledger } = require("../dist/test/core");
 const { Router, defaultBoard } = require("../dist/test/model");
 const { SessionHost } = require("../dist/test/session");
-const root = path.resolve(__dirname, ".."), python = path.resolve(root, "../../.venv/Scripts/python.exe");
+const root = path.resolve(__dirname, ".."), python = require('./helpers.cjs').python;
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const wait = async fn => { for (let i = 0; i < 200; i++) { if (fn()) return; await delay(25); } throw new Error("Timed out"); };
 
 async function fixture(t) {
-  const project = await fs.mkdtemp(path.join(os.tmpdir(), "patchport-history-"));
+  const project = await fs.mkdtemp(path.join(require('./helpers.cjs').temporaryRoot, "patchport-history-"));
   const core = new CoreClient(python, path.join(root, "core")), observer = new CoreClient(python, path.join(root, "core"));
   const ledger = new Ledger(core, path.join(project, "ledgers"));
   const binding = await ledger.inspect(project);

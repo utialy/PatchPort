@@ -9,8 +9,8 @@ const { changedProject, planProject, validateDataPlan } = require("../dist/test/
 const { CoreClient, Ledger } = require("../dist/test/core");
 
 function fixture(t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "patchport-data-"));
-  t.after(() => { assert.ok(path.resolve(root).startsWith(path.resolve(os.tmpdir()) + path.sep)); fs.rmSync(root, { recursive: true, force: true }); });
+  const root = fs.mkdtempSync(path.join(require('./helpers.cjs').temporaryRoot, "patchport-data-"));
+  t.after(() => { assert.ok(path.resolve(root).startsWith(path.resolve(require('./helpers.cjs').temporaryRoot) + path.sep)); fs.rmSync(root, { recursive: true, force: true }); });
   const a = path.join(root, "a"), b = path.join(root, "b"); fs.mkdirSync(a); fs.mkdirSync(b);
   const board = defaultBoard(); Object.assign(board.groups[0], { used: 7, round: "preserved-round", goal: "Shared goal", maxDeliveries: 11, paused: true });
   board.nodes = [a, b].map((project, index) => ({ id: String(index), name: "Peer", project, provider: "claude", profileId: "claude", groupId: "team", x: 0, y: 0 }));
@@ -103,7 +103,7 @@ test("inventory through the actual core pipe preserves separate fallback and bat
   const f = fixture(t), root = path.resolve(__dirname, "..");
   fs.writeFileSync(path.join(f.a, "input.txt"), "input");
   fs.writeFileSync(path.join(f.a, "bridge.json"), JSON.stringify({ project: ".", include: ["input.txt"], writable: ["input.txt"], endpoints: { mock: { adapter: "command", command: ["never-run"] } } }));
-  const core = new CoreClient(path.resolve(root, "../../.venv/Scripts/python.exe"), path.join(root, "core")); t.after(() => core.dispose());
+  const core = new CoreClient(require('./helpers.cjs').python, path.join(root, "core")); t.after(() => core.dispose());
   const ledger = new Ledger(core, path.join(f.root, "ledgers"));
   await ledger.inspect(f.a); await ledger.start(f.board.nodes[0]);
   assert.throws(() => ledger.forget(f.a), /shutdown/);
@@ -133,7 +133,7 @@ test("controller restart after a mirror failure preserves disconnection and expl
     EventEmitter: class { constructor() { this.event = () => disposable(); } fire() {} dispose() {} },
     env: {}, commands: { registerCommand: disposable },
     workspace: { workspaceFolders: [f.a, f.b].map(fsPath => ({ uri: { scheme: "file", fsPath } })), isTrusted: true, textDocuments: [],
-      getConfiguration: () => ({ get: (key, fallback) => key === "corePython" ? path.resolve(root, "../../.venv/Scripts/python.exe") : fallback }),
+      getConfiguration: () => ({ get: (key, fallback) => key === "corePython" ? require('./helpers.cjs').python : fallback }),
       onDidChangeConfiguration: disposable, onDidGrantWorkspaceTrust: disposable },
     window: { terminals: [], tabGroups: { all: [] }, onDidOpenTerminal: disposable, onDidCloseTerminal: disposable, registerTreeDataProvider: disposable,
       showOpenDialog: async () => undefined, showWarningMessage: async () => { confirmations++; return "\uc801\uc6a9"; },

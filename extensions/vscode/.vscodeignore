@@ -10,10 +10,6 @@ node_modules/node-pty/src/**
 node_modules/node-pty/deps/**
 node_modules/node-pty/third_party/**
 node_modules/node-pty/build/**
-node_modules/node-pty/prebuilds/darwin-*/**
-node_modules/node-pty/prebuilds/linux-*/**
-node_modules/node-pty/prebuilds/win32-arm64/**
-node_modules/node-pty/prebuilds/win32-ia32/**
 node_modules/node-pty/lib/*test*
 node_modules/node-pty/fixtures/**
 node_modules/**/*.pdb

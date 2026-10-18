@@ -1,13 +1,13 @@
-const test=require("node:test"),assert=require("node:assert/strict");
+const test=process.platform==='win32'?require('node:test'):require('node:test').skip,assert=require("node:assert/strict");
 const fs=require("node:fs"),path=require("node:path"),os=require("node:os"),crypto=require("node:crypto");
 const {CoreClient}=require("../dist/test/core");
-const root=path.resolve(__dirname,".."),python=path.resolve(root,"../../.venv/Scripts/python.exe");
+const root=path.resolve(__dirname,".."),python=require('./helpers.cjs').python;
 async function fixture(t){
- const project=fs.mkdtempSync(path.join(os.tmpdir(),"patchport-cleanup-")),config=path.join(project,"bridge.json"),database=path.join(project,".agent-bridge/queue.sqlite3");
+ const project=fs.mkdtempSync(path.join(require('./helpers.cjs').temporaryRoot,"patchport-cleanup-")),config=path.join(project,"bridge.json"),database=path.join(project,".agent-bridge/queue.sqlite3");
  fs.writeFileSync(config,JSON.stringify({project:".",include:["input.txt"],writable:["input.txt"],endpoints:{mock:{adapter:"command",command:[python,"-c","pass"]}}}));
  fs.writeFileSync(path.join(project,"input.txt"),"ORIGINAL");fs.writeFileSync(path.join(project,"bridge.py"),"pass\n");
  fs.writeFileSync(path.join(project,".bridge-integration.json"),JSON.stringify({schema:1,python,files:{"bridge.py":crypto.createHash("sha256").update("pass\n").digest("hex")}}));
- const core=new CoreClient(python,path.join(root,"core"));t.after(async()=>{core.dispose();await new Promise(r=>setTimeout(r,100));assert.ok(path.resolve(project).startsWith(path.resolve(os.tmpdir())+path.sep));fs.chmodSync(path.join(project,".bridge-integration.json"),0o666);fs.rmSync(project,{recursive:true,force:true});});
+ const core=new CoreClient(python,path.join(root,"core"));t.after(async()=>{core.dispose();await new Promise(r=>setTimeout(r,100));assert.ok(path.resolve(project).startsWith(path.resolve(require('./helpers.cjs').temporaryRoot)+path.sep));fs.chmodSync(path.join(project,".bridge-integration.json"),0o666);fs.rmSync(project,{recursive:true,force:true});});
  assert.equal((await core.request("capabilities")).project_cleanup_schema,1);
  const preparation=await core.request("records.prepare.preview",{project,config});await core.request("records.apply",{plan_id:preparation.plan_id,apply:true});
  return {project,config,database,core};

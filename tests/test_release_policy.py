@@ -39,6 +39,7 @@ class ReleasePolicyTests(unittest.TestCase):
         self.assertEqual(policy.check_content('extensions/vscode/.vscodeignore', b'dist/test/**\n'), [])
         self.assertTrue(policy.check_content('extensions/vscode/core/agent_bridge/x.py', b'value = 1\n'))
         self.assertTrue(policy.check_content('extensions/vscode/runtime-manifest.json', b'{}'))
+        self.assertTrue(policy.check_content('extensions/vscode/native-manifest.json', b'{}'))
         self.assertTrue(policy.check_content('extensions/vscode/dist/bundle.js', b'value = 1;'))
 
     def test_private_paths_rejected(self):

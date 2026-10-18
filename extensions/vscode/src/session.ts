@@ -6,7 +6,7 @@ import * as path from "node:path";
 import { EventEmitter } from "node:events";
 import { Terminal as HeadlessTerminal, ITerminalAddon } from "@xterm/headless";
 import { SerializeAddon } from "@xterm/addon-serialize";
-import { NodeConfig, Profile, Router, cleanMessage, inputIntent, MAX_TEXT } from "./model";
+import { NodeConfig, Profile, Router, cleanMessage, inputIntent, projectKey, MAX_TEXT } from "./model";
 import { Ledger } from "./core";
 import { Sample, claudeUsage, codexUsage, statusCost, unknownMetrics } from "./providerUsage";
 
@@ -14,13 +14,14 @@ export interface Running { process: pty.IPty; token: string; node: NodeConfig; c
 const psQuote = (s: string) => `'${s.replace(/'/g, "''")}'`;
 const shQuote = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
 
-export function launch(profile: Profile, args: string[], cwd: string): { file: string; args: string[] } {
+export function launch(profile: Profile, args: string[], cwd: string, platform = process.platform): { file: string; args: string[] } {
   if (profile.shell === "direct") {
-    if (process.platform === "win32" && /\.(cmd|bat|ps1)$/i.test(profile.command)) throw new Error("Run scripts and aliases through an explicit PowerShell profile.");
+    if (platform === "win32" && /\.(cmd|bat|ps1)$/i.test(profile.command)) throw new Error("Run scripts and aliases through an explicit PowerShell profile.");
     return { file: profile.command, args };
   }
   if (profile.shell === "powershell" || profile.shell === "pwsh") {
-    const file = profile.shellPath || (profile.shell === "powershell" ? path.join(process.env.SystemRoot || "C:\\Windows", "System32/WindowsPowerShell/v1.0/powershell.exe") : "pwsh.exe");
+    if (profile.shell === 'powershell' && platform !== 'win32') throw new Error('Windows PowerShell requires Windows. Select pwsh, bash, zsh or direct.');
+    const file = profile.shellPath || (profile.shell === 'powershell' ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe') : platform === 'win32' ? 'pwsh.exe' : 'pwsh');
     let script = "$ErrorActionPreference='Stop'; [Console]::InputEncoding=[Console]::OutputEncoding=$OutputEncoding=[System.Text.UTF8Encoding]::new($false); try { ";
     if (profile.profilePath) script += `. ${psQuote(profile.profilePath)}; `;
     script += `Set-Location -LiteralPath ${psQuote(cwd)}; $global:LASTEXITCODE=0; $patchportArgs=@(${args.map(psQuote).join(",")}); `;
@@ -110,7 +111,7 @@ export class SessionHost extends EventEmitter {
       if (this.closed || this.cancelledStarts.has(node.id)) throw new Error("Terminal start cancelled.");
       const size = this.sizes.get(node.id) || { cols: 90, rows: 22 };
       launchAttempted = true;
-      const child = pty.spawn(invocation.file, invocation.args, { name: "xterm-256color", ...size, cwd: node.project, env, useConpty: true });
+      const child = pty.spawn(invocation.file, invocation.args, { name: 'xterm-256color', ...size, cwd: node.project, env, ...(process.platform === 'win32' ? { useConpty: true } : {}) });
       const screen = new HeadlessTerminal({ ...size, scrollback: 2000, allowProposedApi: true });
       const serializer = new SerializeAddon(); screen.loadAddon(serializer as unknown as ITerminalAddon);
       const session: Running = { process: child, token, node, cwd, profile, output: "", screen, serializer, sequence: 0, turn: 0, disposed: false, startedAt: Date.now(), usageSequence: 0, samples: new Map(), costBaseline: 0, lastCost: null, cost: null, seen: new Set() };
@@ -146,9 +147,9 @@ export class SessionHost extends EventEmitter {
   private async event(session: Running, payload: unknown): Promise<Record<string, unknown> | void> {
     if (session.disposed || !payload || typeof payload !== "object") return;
     const p = payload as Record<string, unknown>;
-    const cwd = typeof p.cwd === "string" ? path.resolve(p.cwd).toLowerCase() : undefined;
+    const cwd = typeof p.cwd === 'string' ? projectKey(path.resolve(p.cwd)) : undefined;
     const id = session.node.id;
-    if (cwd !== undefined && ![session.cwd, session.node.project].some(project => project && cwd === path.resolve(project).toLowerCase())) { this.router.setPhase(id, "attention", "Working directory changed; automatic delivery stopped."); return; }
+    if (cwd !== undefined && ![session.cwd, session.node.project].some(project => project && cwd === projectKey(path.resolve(project)))) { this.router.setPhase(id, "attention", "Working directory changed; automatic delivery stopped."); return; }
     if (session.profile.provider === "claude") {
       if (typeof p.session_id !== "string") throw new Error("Missing session identity");
       if (session.eventSession && session.eventSession !== p.session_id) {
@@ -201,7 +202,7 @@ export class SessionHost extends EventEmitter {
     let sample: Sample = { metrics: unknownMetrics(), model: "UNKNOWN", source: "UNKNOWN", coverage: "provider usage unavailable" };
     try {
       if (session.profile.provider === "claude" && session.transcript) sample = await claudeUsage(session.transcript, session.eventSession, session.startedAt);
-      if (session.profile.provider === "codex" && session.codexHome) sample = await codexUsage(session.codexHome, session.eventSession, session.node.project, session.startedAt);
+      if (session.profile.provider === "codex" && session.codexHome) sample = await codexUsage(session.codexHome, session.eventSession, session.cwd || session.node.project, session.startedAt);
     } catch { sample.coverage = "usage missing or unsupported; not zero"; }
     if (session.profile.provider === "claude") sample.metrics.cost_usd = session.cost;
     session.samples.set(session.eventSession, sample);

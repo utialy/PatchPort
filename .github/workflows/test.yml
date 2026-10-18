@@ -19,23 +19,72 @@ jobs:
       - run: python scripts/check_public_release.py --staged
       - run: python scripts/run_tests.py
   vscode-extension:
-    runs-on: windows-latest
+    name: extension (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: win32-x64
+            python: ../../.venv/Scripts/python.exe
+          - os: ubuntu-22.04
+            target: linux-x64
+            python: ../../.venv/bin/python
+            gtk: libgtk-3-0
+            alsa: libasound2
+          - os: ubuntu-24.04-arm
+            target: linux-arm64
+            python: ../../.venv/bin/python
+            gtk: libgtk-3-0t64
+            alsa: libasound2t64
+          - os: macos-15-intel
+            target: darwin-x64
+            python: ../../.venv/bin/python
+          - os: macos-14
+            target: darwin-arm64
+            python: ../../.venv/bin/python
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
     defaults:
       run:
         working-directory: extensions/vscode
+        shell: bash
+    env:
+      PATCHPORT_ARTIFACT_DIR: ${{ github.workspace }}/.bridge/native-artifacts
+      PATCHPORT_HOST_EVIDENCE: ${{ github.workspace }}/.bridge/native-host/${{ matrix.target }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.14'
+          python-version: '3.12'
       - uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version: '24.14.0'
           cache: npm
           cache-dependency-path: extensions/vscode/package-lock.json
       - run: python -m venv ../../.venv
-      - run: ../../.venv/Scripts/python.exe -m pip install ../..
+      - run: ${{ matrix.python }} -m pip install ../..
+      - if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zsh xvfb ${{ matrix.gtk }} libnss3 ${{ matrix.alsa }} libgbm1 xauth
       - run: npm ci
       - run: npm run check
       - run: npm test
-      - run: npm run package
+      - run: ${{ matrix.python }} -m unittest discover -s test -p test_vsix.py -v
+      - run: npm run package -- --target ${{ matrix.target }}
+      - if: runner.os == 'Linux'
+        run: xvfb-run -a npm run test:host
+      - if: runner.os != 'Linux'
+        run: npm run test:host
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: patchport-${{ matrix.target }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            .bridge/native-artifacts/*.vsix
+            .bridge/native-host/**/host-result.json
+            .bridge/native-host/**/electron-pty.log
+            .bridge/native-host/**/package-verification.log

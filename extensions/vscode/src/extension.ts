@@ -8,12 +8,9 @@ import { affectedPaths, cleanupRoots, dirtyConflicts, resumeProfile, runtimeRepo
 import { Configs, Snapshot, StateStore } from "./stateStore";
 import { changedProject, DataAction, DataPlan, dataActions, planProject, validateDataPlan } from "./projectData";
 
+import { defaultProfiles, defaultPython, defaultShell, supportedLocal } from './platform';
+
 let controller: Controller | undefined;
-const defaultProfiles = (): Profile[] => [
-  { id: "claude", name: "Claude Code", provider: "claude", command: "claude", args: [], shell: process.platform === "win32" ? "powershell" : "bash" },
-  { id: "codex", name: "Codex", provider: "codex", command: "codex", args: [], shell: process.platform === "win32" ? "powershell" : "bash" },
-  { id: "shell", name: "Shell", provider: "terminal", command: process.platform === "win32" ? "powershell.exe" : "bash", args: [], shell: "direct" }
-];
 
 class Controller implements vscode.TreeDataProvider<vscode.TreeItem>, vscode.Disposable {
   private panel?: vscode.WebviewPanel;
@@ -91,7 +88,7 @@ class Controller implements vscode.TreeDataProvider<vscode.TreeItem>, vscode.Dis
       if (value && path.isAbsolute(value)) this.savedConfigs[key] = value;
     }
     const board = restoreBoard(snapshot?.board || context.workspaceState.get("board.v1"), this.projects());
-    this.core = new CoreClient(vscode.workspace.getConfiguration("patchport").get<string>("corePython", "python"), path.join(context.extensionPath, "core"));
+    this.core = new CoreClient(vscode.workspace.getConfiguration('patchport').get<string>('corePython', '') || defaultPython(), path.join(context.extensionPath, 'core'));
     this.ledger = new Ledger(this.core, path.join(context.globalStorageUri.fsPath, "ledgers"), () => this.changed());
     this.router = new Router(board, async (id, text) => {
       const delivery = this.router.deliveries.find(d => d.target === id && d.status === "sent");
@@ -134,7 +131,7 @@ class Controller implements vscode.TreeDataProvider<vscode.TreeItem>, vscode.Dis
     vscode.window.terminals.forEach(t => { let id = this.externalIds.get(t); if (!id) { id = randomUUID(); this.externalIds.set(t, id); } this.external.set(id, t); });
     return {
       board: this.router.board, runtime: [...this.router.runtime.values()], active: this.router.board.nodes.filter(n => this.host.isActive(n.id)).map(n => n.id), profiles: this.profiles(), projects: this.projects(),
-      trusted: vscode.workspace.isTrusted, supported: !vscode.env.remoteName && process.platform === "win32", platform: process.platform, remote: vscode.env.remoteName || "",
+      trusted: vscode.workspace.isTrusted, supported: supportedLocal(process.platform, process.arch, vscode.env.remoteName), defaultShell: defaultShell(), platform: process.platform, remote: vscode.env.remoteName || '',
       deliveries: this.router.deliveries.slice(-100).map(d => ({ ...d, text: d.text.slice(0, 2000) })), notices: this.router.notices, routes: this.router.board.edges.map(e => this.router.routeStatus(e)),
       external: [...this.external].map(([id, t]) => ({ id, name: t.name, capability: "focus-and-explicit-input" })), version: this.context.extension.packageJSON.version, core: this.coreView,
       projectData: { ...this.dataView, pending: this.stateStore.pending, busy: this.dataBusy }, detachedProjects: this.projects().filter(p => this.detached(p)),

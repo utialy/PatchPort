@@ -1,5 +1,6 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
+import { projectKey } from './model';
 
 export type Metrics = Record<'input_tokens' | 'output_tokens' | 'cache_read_tokens' | 'cache_write_tokens' | 'cost_usd' | 'elapsed_seconds', number | null>;
 const numeric = (value: unknown): number | null => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
@@ -13,7 +14,10 @@ async function lines(file: string): Promise<any[]> {
   // Windows permits case variants and short paths. Reject link ancestry rather
   // than comparing path spelling, then verify the opened regular-file identity.
   for (let parent = path.dirname(path.resolve(file)); ; parent = path.dirname(parent)) {
-    if ((await fs.lstat(parent)).isSymbolicLink()) throw new Error('Unsupported usage file');
+    if ((await fs.lstat(parent)).isSymbolicLink()) {
+      const systemAlias = process.platform === 'darwin' && (parent === '/var' || parent === '/tmp') && await fs.realpath(parent) === '/private' + parent;
+      if (!systemAlias) throw new Error('Unsupported usage file');
+    }
     if (path.dirname(parent) === parent) break;
   }
   // Read only one exact, owned session file; never enumerate historical content.
@@ -64,7 +68,7 @@ export async function codexUsage(home: string, sessionId: string, project: strin
   if (unique.length !== 1) throw new Error('Exact Codex rollout unavailable');
   const rows = await lines(unique[0]);
   const meta = rows.find(row => row.type === 'session_meta')?.payload;
-  if (meta?.id !== sessionId || typeof meta.cwd !== 'string' || !Number.isFinite(Date.parse(meta.timestamp)) || path.resolve(meta.cwd).toLowerCase() !== path.resolve(project).toLowerCase() || Date.parse(meta.timestamp) < started - 5000) throw new Error('Resumed or unrelated Codex rollout');
+  if (meta?.id !== sessionId || typeof meta.cwd !== 'string' || !Number.isFinite(Date.parse(meta.timestamp)) || projectKey(path.resolve(meta.cwd)) !== projectKey(path.resolve(project)) || Date.parse(meta.timestamp) < started - 5000) throw new Error('Resumed or unrelated Codex rollout');
   const events = rows.filter(row => row.type === 'event_msg' && row.payload?.type === 'token_count' && row.payload.info?.total_token_usage);
   const totals = events.at(-1)?.payload.info.total_token_usage;
   if (!totals) throw new Error('Codex usage not yet reported');

@@ -6,22 +6,24 @@ const http = require("node:http");
 const { Router, defaultBoard } = require("../dist/test/model");
 const { SessionHost } = require("../dist/test/session");
 const root = path.resolve(__dirname, "..");
-const evidence = path.resolve(root, "../../.bridge/vscode-connection-20261004");
+const evidence = process.env.PATCHPORT_TEST_EVIDENCE || path.resolve(root, '../../.bridge/cross-platform-tests', `${process.platform}-${process.arch}`);
 const waitFor = async (check, timeout = 15000) => { const end = Date.now() + timeout; while (!check()) { if (Date.now() > end) throw new Error("Timed out waiting for PTY event"); await new Promise(resolve => setTimeout(resolve, 50)); } };
 
 test("real PTYs honor profile functions and deliver Claude to Codex via installed adapters", { timeout: 45000 }, async () => {
   await fs.mkdir(evidence, { recursive: true });
   const workspace = path.join(evidence, "fixture project \ud55c\uae00"); await fs.mkdir(workspace, { recursive: true });
-  const profilePath = path.join(workspace, "custom profile.ps1");
+  const shell = process.platform === 'win32' ? 'powershell' : process.platform === 'darwin' ? 'zsh' : 'bash';
+  const profilePath = path.join(workspace, process.platform === 'win32' ? 'custom profile.ps1' : 'custom profile.sh');
   const psLiteral = text => "'" + text.replace(/'/g, "''") + "'";
-  await fs.writeFile(profilePath, `function fixture-ai { & ${psLiteral(process.execPath)} @args }\n`, "utf8");
+  const shLiteral = text => "'" + text.replace(/'/g, "'\\''") + "'";
+  await fs.writeFile(profilePath, process.platform === 'win32' ? `function fixture-ai { & ${psLiteral(process.execPath)} @args }\n` : `fixture-ai() { ${shLiteral(process.execPath)} \"$@\"; }\n`, 'utf8');
   const board = defaultBoard(); board.nodes = ["a", "b"].map((id, i) => ({ id, name: id, provider: i ? "codex" : "claude", profileId: id, project: workspace, groupId: "team", x: 0, y: 0 }));
   board.groups[0].maxHops = 2;
   let host; const router = new Router(board, (id, text) => host.send(id, text)); host = new SessionHost(router, path.join(evidence, "fixture-runtime"), root);
   const output = { a: "", b: "" }; host.on("output", (id, data) => output[id] += data);
   try {
     host.resize("a", 73, 19);
-    for (const n of board.nodes) await host.start(n, { id: n.id, name: n.id, provider: n.provider, command: process.platform === "win32" ? "fixture-ai" : process.execPath, args: [path.join(__dirname, "fake-ai.cjs"), "--provider", n.provider], shell: process.platform === "win32" ? "powershell" : "direct", profilePath: process.platform === "win32" ? profilePath : undefined });
+    for (const n of board.nodes) await host.start(n, { id: n.id, name: n.id, provider: n.provider, command: 'fixture-ai', args: [path.join(__dirname, 'fake-ai.cjs'), '--provider', n.provider], shell, profilePath });
     await waitFor(() => router.runtime.get("a")?.phase === "ready" && output.b.includes("PATCHPORT_FIXTURE"));
     assert.equal(host.sessions.get("a").screen.cols, 73);
     router.ready("b", true); router.connect("a", "b"); router.connect("b", "a");

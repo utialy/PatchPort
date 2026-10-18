@@ -6,7 +6,7 @@ import { WorkflowPanel } from "./workflowWebview";
 declare function acquireVsCodeApi(): { postMessage(message: unknown): void; getState(): unknown; setState(value: unknown): void };
 const api = acquireVsCodeApi();
 const post = (type: string, values: Record<string, unknown> = {}) => api.postMessage({ type, ...values });
-interface State { board: Board; runtime: Runtime[]; active: string[]; profiles: Profile[]; projects: string[]; trusted: boolean; supported: boolean; remote: string; version: string; deliveries: Delivery[]; notices: Notice[]; routes: { id: string; state: string; label: string }[]; external: { id: string; name: string; capability: string }[]; core?: any }
+interface State { board: Board; runtime: Runtime[]; active: string[]; profiles: Profile[]; projects: string[]; trusted: boolean; supported: boolean; defaultShell?: Profile['shell']; remote: string; version: string; deliveries: Delivery[]; notices: Notice[]; routes: { id: string; state: string; label: string }[]; external: { id: string; name: string; capability: string }[]; core?: any }
 let state: State | undefined;
 let zoom = 0.9;
 let connecting = "";
@@ -155,7 +155,7 @@ function openProfiles(selected?: string): void {
   const provider = selectItems([{ value: "claude", label: "Claude Code - automatic routing" }, { value: "codex", label: "Codex - automatic routing" }, { value: "terminal", label: "Ordinary terminal - manual input" }], existing?.provider);
   const command = textInput(existing?.command || "", "Example: claude-2"); command.required = true;
   const args = textInput(JSON.stringify(existing?.args || []), "[\"--model\", \"...\"]");
-  const shell = selectItems(["powershell", "pwsh", "bash", "zsh", "direct"].map(v => ({ value: v, label: v })), existing?.shell || "powershell");
+  const shell = selectItems(['powershell', 'pwsh', 'bash', 'zsh', 'direct'].map(v => ({ value: v, label: v })), existing?.shell || state?.defaultShell || 'direct');
   const shellPath = textInput(existing?.shellPath || "", "Empty uses the default shell");
   const profilePath = textInput(existing?.profilePath || "", "Empty uses the default user profile");
   field(form, "Display name", name); field(form, "Provider", provider); field(form, "Command name or executable", command, "Enter only the command name. Put additional options in Arguments below.");

@@ -5,3 +5,5 @@ out/
 *.vsix
 core/
 runtime-manifest.json
+native-manifest.json
+.bridge/

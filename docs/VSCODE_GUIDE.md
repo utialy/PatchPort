@@ -1,6 +1,22 @@
 # PatchPort in VS Code: step-by-step guide
 
-This guide follows the **English 0.4.0 extension** on local Windows x64 VS Code. Board/workflow screenshots retain their earlier layout; the data-management section describes 0.4.0. Screenshots are captured from the actual extension Webview using mock demo data. They show the controls, not a live account, provider response or billing statement.
+## Native builds in 0.5.0
+
+Use a package matching local VS Code's OS and CPU: Windows x64, glibc Linux
+x64/ARM64, or macOS Intel/Apple Silicon. Native builds and actual platform
+measurements are recorded separately. Remote extension hosts, Remote-WSL and
+Alpine/musl are outside this scope.
+
+Default provider shells are Windows PowerShell, Linux Bash and macOS Zsh.
+Leave patchport.corePython empty for python on Windows or python3 on Linux/macOS,
+or select an absolute Python 3.11+ interpreter. Explicit profiles and existing
+provider authentication/permissions are preserved.
+
+Batch/role body removal and connection-file removal, including their guided
+cleanup stages, remain Windows-only. Their platform guards are retained; other
+platforms can inspect records and use the separate supported workflows.
+
+This guide follows the **English 0.5.0 extension**. Existing screenshots were captured on Windows in 0.4.0 from the actual extension Webview using mock demo data. They show the controls, not a live account, provider response or billing statement.
 
 ## 1. Install and check the prerequisites
 
@@ -203,7 +219,7 @@ A new extension host restores cards, paused groups, group round/counts and recor
 | Usage unknown | The supported signal is missing, reset, resumed or incomplete; this is not zero consumption |
 | No provider session ID | Start a new managed session; PatchPort does not scan global conversation histories to guess |
 
-See [validation](VALIDATION.md), [runner management](RUNNER_MANAGEMENT.md), [context](CONTEXT.md) and [usage](USAGE.md) for precise boundaries. The current extension scope is local Windows x64; remote/WSL/other OS extension execution and external-process handoff remain future work.
+See [validation](VALIDATION.md), [runner management](RUNNER_MANAGEMENT.md), [context](CONTEXT.md) and [usage](USAGE.md) for precise boundaries. The current extension scope is local native desktop use; remote extension hosts, Remote-WSL and external-process handoff remain future work.
 
 ## Project data and settings
 

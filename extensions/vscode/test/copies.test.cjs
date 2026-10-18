@@ -7,7 +7,7 @@ const cp = require("node:child_process");
 const { CoreClient } = require("../dist/test/core");
 const { cleanupRoots, dirtyConflicts } = require("../dist/test/workflow");
 const root = path.resolve(__dirname, "..");
-const python = path.resolve(root, "../../.venv/Scripts/python.exe");
+const python = require('./helpers.cjs').python;
 
 const prepare = String.raw`
 import os, sys, time
@@ -30,8 +30,8 @@ for name in ('a', 'b', 'c'):
 `;
 
 function fixture(t) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "patchport-copies-"));
-  t.after(() => { assert.ok(path.resolve(dir).startsWith(path.resolve(os.tmpdir()) + path.sep)); fs.rmSync(dir, { recursive: true, force: true }); });
+  const dir = fs.mkdtempSync(path.join(require('./helpers.cjs').temporaryRoot, "patchport-copies-"));
+  t.after(() => { assert.ok(path.resolve(dir).startsWith(path.resolve(require('./helpers.cjs').temporaryRoot) + path.sep)); fs.rmSync(dir, { recursive: true, force: true }); });
   fs.writeFileSync(path.join(dir, "input.txt"), "Original");
   const config = path.join(dir, "bridge.json");
   fs.writeFileSync(config, JSON.stringify({ project: ".", include: ["input.txt"], writable: ["input.txt"], endpoints: { mock: { adapter: "command", command: ["never-run"] } } }));
@@ -42,7 +42,7 @@ function fixture(t) {
 }
 
 test("dirty protection covers every selected copy and excludes unrelated copies", () => {
-  const a = path.resolve(os.tmpdir(), "copies/a"), b = path.resolve(os.tmpdir(), "copies/b");
+  const a = path.resolve(require('./helpers.cjs').temporaryRoot, "copies/a"), b = path.resolve(require('./helpers.cjs').temporaryRoot, "copies/b");
   const roots = cleanupRoots("copies.prune.preview", { items: [{ artifact: { path: a } }, { artifact: { path: b } }] });
   assert.deepEqual(roots, [a, b]);
   assert.deepEqual(dirtyConflicts(roots, ["."], [path.join(a, ".hidden/log"), path.join(b, "new-unsaved.txt"), a + "-other/file"]), [path.join(a, ".hidden/log"), path.join(b, "new-unsaved.txt")]);

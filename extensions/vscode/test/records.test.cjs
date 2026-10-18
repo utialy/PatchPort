@@ -1,7 +1,7 @@
 const test = require("node:test"), assert = require("node:assert/strict");
 const fs = require("node:fs"), path = require("node:path"), os = require("node:os"), cp = require("node:child_process");
 const { CoreClient } = require("../dist/test/core");
-const root = path.resolve(__dirname, ".."), python = path.resolve(root, "../../.venv/Scripts/python.exe");
+const root = path.resolve(__dirname, ".."), python = require('./helpers.cjs').python;
 const secret = "SECRET_BODY_DO_NOT_RETURN";
 const prepare = String.raw`
 import sys
@@ -19,8 +19,8 @@ for index in range(27):
     store.claim(task); store.finish(task,'DONE',dict(workspace=str(home),answer={'text':'SECRET_BODY_DO_NOT_RETURN'}))
 `;
 function fixture(t) {
-  const project=fs.mkdtempSync(path.join(os.tmpdir(),"patchport-records-"));
-  t.after(()=>{ assert.ok(path.resolve(project).startsWith(path.resolve(os.tmpdir())+path.sep)); fs.rmSync(project,{recursive:true,force:true}); });
+  const project=fs.mkdtempSync(path.join(require('./helpers.cjs').temporaryRoot,"patchport-records-"));
+  t.after(()=>{ assert.ok(path.resolve(project).startsWith(path.resolve(require('./helpers.cjs').temporaryRoot)+path.sep)); fs.rmSync(project,{recursive:true,force:true}); });
   const prepared=cp.spawnSync(python,["-B","-X","utf8","-c",prepare,project],{windowsHide:true,encoding:"utf8",env:{...process.env,PYTHONPATH:path.join(root,"core")}});
   assert.equal(prepared.status,0,prepared.stderr);
   const core=new CoreClient(python,path.join(root,"core")); t.after(()=>core.dispose());

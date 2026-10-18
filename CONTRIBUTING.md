@@ -18,7 +18,7 @@ Use an English Conventional Commit subject, such as `fix: preserve cleanup recei
 Describe the problem, resulting behavior and checks in pull requests. Run the
 relevant tests and review `git diff --check` before submitting.
 
-For the Windows extension, use Node.js 24+ and an installed Python 3.11+ runtime
+For each native extension target, use Node.js 24+ and an installed Python 3.11+ runtime
 in the checkout's .venv. From extensions/vscode run `npm ci`, `npm run check`,
 `npm test` and `npm run package`. Generated core copies/manifests, bundles and
 VSIX artifacts are excluded from commits. Screenshots use controlled mock data,
@@ -31,3 +31,8 @@ state, private development notes and generated artifacts out of contributions.
 The Python package is the extension's internal management backend. Keep its
 entry points and helper assets working, but distribute the product as a VSIX.
 The public tree does not contain a separate desktop app or OS installer.
+
+Build on the target OS/CPU. `npm run test:host` checks the installed VSIX with
+the actual VS Code Electron runtime and an isolated extension host; Linux uses
+`xvfb-run -a npm run test:host`. See [platform builds](docs/PLATFORMS.md).
+Native/core manifests are generated inputs and must remain out of commits.

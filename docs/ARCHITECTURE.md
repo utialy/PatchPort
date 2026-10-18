@@ -110,3 +110,19 @@ The public product is the VS Code extension. The Python package and fixed helper
 are its internal backend/build inputs. Standalone desktop applications and OS
 installers are not included. Service registration detection remains in the backend
 to preserve ownership and stop removal/execution from bypassing existing services.
+
+## Native platform packaging
+
+platform.ts chooses supported local OS/CPU pairs and default shells/interpreters.
+POSIX paths retain case. Managed usage compares the frozen physical cwd; only
+the fixed macOS /var and /tmp aliases may occur in otherwise link-free usage paths.
+Remote extension hosts remain outside this contract.
+
+Native packaging accepts only the current host target, stages the pinned
+node-pty assets and records their hashes. Windows uses seven native files,
+Linux one pty.node, and macOS pty.node plus an executable spawn-helper. The VSIX
+verifier checks target, binary CPU, required assets, executable mode and hashes.
+Host smoke installs the package into an isolated profile, loads its PTY through
+VS Code's actual Electron runtime, activates the installed extension and opens
+the board. POSIX profiles use short temporary paths for UNIX socket limits.
+Windows-only task/role-body and connection-file removal guards are preserved.

@@ -8,10 +8,10 @@ const { dirtyConflicts, runtimeReport, resumeProfile, affectedPaths } = require(
 const { restoreBoard, defaultBoard } = require("../dist/test/model");
 const { StateStore } = require("../dist/test/stateStore");
 const root = path.resolve(__dirname, "..");
-const python = path.resolve(root, "../../.venv/Scripts/python.exe");
+const python = require('./helpers.cjs').python;
 
 test("same core connection retains one-use plans; reconnection cannot replay them", async t => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "patchport-p1-")); t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const dir = await fs.mkdtemp(path.join(require('./helpers.cjs').temporaryRoot, "patchport-p1-")); t.after(() => fs.rm(dir, { recursive: true, force: true }));
   await fs.writeFile(path.join(dir, "input.txt"), "Original");
   const config = path.join(dir, "bridge.json");
   await fs.writeFile(config, JSON.stringify({ project: ".", include: ["input.txt"], writable: ["input.txt"], endpoints: { mock: { adapter: "command", command: [python, "-c", "print('MOCK')"] } } }));
@@ -29,7 +29,7 @@ test("same core connection retains one-use plans; reconnection cannot replay the
 });
 
 test("dirty file protection covers selected files, directories, proposal copies and summary sources", () => {
-  const project = path.resolve(os.tmpdir(), "original"), proposal = path.resolve(os.tmpdir(), "copy");
+  const project = path.resolve(require('./helpers.cjs').temporaryRoot, "original"), proposal = path.resolve(require('./helpers.cjs').temporaryRoot, "copy");
   assert.deepEqual(dirtyConflicts([project, proposal], ["src"], [path.join(project, "src/a.py"), path.join(proposal, "src/a.py"), path.join(project, "src-other/a.py")]), [path.join(project, "src/a.py"), path.join(proposal, "src/a.py")]);
   const paths = affectedPaths("batch.preview", {}, { context: { selected: [{ path: "src/a.py" }], summaries: [{ record: { body_path: "summary.md", sources: [{ path: "history.md" }] } }] } });
   assert.ok(paths.includes("history.md"));
@@ -37,7 +37,7 @@ test("dirty file protection covers selected files, directories, proposal copies 
 });
 
 test("creating the first batch queue preserves an already active project ledger across hosts", async t => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "patchport-ledger-bind-")); t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const dir = await fs.mkdtemp(path.join(require('./helpers.cjs').temporaryRoot, "patchport-ledger-bind-")); t.after(() => fs.rm(dir, { recursive: true, force: true }));
   await fs.writeFile(path.join(dir, "input.txt"), "Original");
   const config = path.join(dir, "bridge.json");
   await fs.writeFile(config, JSON.stringify({ project: ".", include: ["input.txt"], writable: ["input.txt"], endpoints: { mock: { adapter: "command", command: [python, "-c", "print('MOCK')"] } } }));
@@ -59,7 +59,7 @@ test("creating the first batch queue preserves an already active project ledger 
 
 test("runtime manifest validates installed core and detects a damaged runtime", async t => {
   assert.equal((await runtimeReport(root)).integrity, "VERIFIED");
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "patchport-runtime-")); t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const dir = await fs.mkdtemp(path.join(require('./helpers.cjs').temporaryRoot, "patchport-runtime-")); t.after(() => fs.rm(dir, { recursive: true, force: true }));
   await fs.cp(path.join(root, "core"), path.join(dir, "core"), { recursive: true });
   await fs.copyFile(path.join(root, "runtime-manifest.json"), path.join(dir, "runtime-manifest.json"));
   await fs.appendFile(path.join(dir, "core/agent_bridge/p1.py"), "\n# Corrupt fixture\n");
@@ -89,7 +89,7 @@ test("Windows host casing changes preserve restored cards and their project bind
 });
 
 test("durable board snapshot survives a new host and refuses stale or damaged writes", async t => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "patchport-board-state-")); t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const dir = await fs.mkdtemp(path.join(require('./helpers.cjs').temporaryRoot, "patchport-board-state-")); t.after(() => fs.rm(dir, { recursive: true, force: true }));
   const first = new StateStore(dir, [dir]); first.load();
   const board = defaultBoard(); board.groups[0].used = 7; board.groups[0].round = "saved-round";
   first.save(board, { [dir]: path.join(dir, "custom.json") }, "0.3.0");

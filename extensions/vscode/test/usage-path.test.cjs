@@ -6,7 +6,7 @@ const os = require('node:os');
 const {claudeUsage} = require('../dist/test/providerUsage');
 
 test('usage accepts Windows casing and rejects linked ancestors', async t => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'patchport-usage-path-'));
+  const root = await fs.mkdtemp(path.join(require('./helpers.cjs').temporaryRoot, 'patchport-usage-path-'));
   t.after(() => fs.rm(root, {recursive:true,force:true}));
   const folder = path.join(root, 'actual'); await fs.mkdir(folder);
   const id = '11111111-1111-4111-8111-111111111111';

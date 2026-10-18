@@ -1,7 +1,7 @@
-const test=require("node:test"),assert=require("node:assert/strict");
+const test=process.platform==='win32'?require('node:test'):require('node:test').skip,assert=require("node:assert/strict");
 const fs=require("node:fs"),path=require("node:path"),os=require("node:os");
 const {CoreClient}=require("../dist/test/core");
-const root=path.resolve(__dirname,".."),python=path.resolve(root,"../../.venv/Scripts/python.exe");
+const root=path.resolve(__dirname,".."),python=require('./helpers.cjs').python;
 const secret="PRIVATE_FLOW_BODY";
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function until(read,details=()=>'',deadline=Date.now()+20000){
@@ -13,7 +13,7 @@ async function until(read,details=()=>'',deadline=Date.now()+20000){
   throw new Error('Flow fixture timed out: '+details()+' '+String(last||''));
 }
 async function fixture(t){
-  const project=fs.mkdtempSync(path.join(os.tmpdir(),"patchport-flow-body-"));
+  const project=fs.mkdtempSync(path.join(require('./helpers.cjs').temporaryRoot,"patchport-flow-body-"));
   const config=path.join(project,"bridge.json"),database=path.join(project,".agent-bridge/queue.sqlite3"),script=path.join(project,"mock_codex.py");
   fs.writeFileSync(path.join(project,"input.txt"),secret);
   fs.writeFileSync(script,"import json,sys\nfrom pathlib import Path\nsys.stdin.read()\nPath(sys.argv[sys.argv.index('--output-last-message')+1]).write_text('PRIVATE_FLOW_BODY')\nprint(json.dumps({'type':'turn.completed','usage':{'input_tokens':2,'output_tokens':3}}))\n");
@@ -21,7 +21,7 @@ async function fixture(t){
   fs.writeFileSync(config,JSON.stringify({project:".",include:["input.txt"],writable:["input.txt"],endpoints:{mock:endpoint}}));
   fs.writeFileSync(path.join(project,"role_workflow.json"),JSON.stringify({developer:endpoint,reviewer:endpoint,checks:[[python,"-c","pass"]]}));
   const core=new CoreClient(python,path.join(root,"core"));
-  t.after(async()=>{core.dispose();await sleep(250);assert.ok(path.resolve(project).startsWith(path.resolve(os.tmpdir())+path.sep));fs.rmSync(project,{recursive:true,force:true});});
+  t.after(async()=>{core.dispose();await sleep(250);assert.ok(path.resolve(project).startsWith(path.resolve(require('./helpers.cjs').temporaryRoot)+path.sep));fs.rmSync(project,{recursive:true,force:true});});
   assert.equal((await core.request("capabilities")).records_flow_schema,1);
   for(const action of ["records.prepare.preview","records.roles.prepare.preview"]){
     const plan=await core.request(action,{project,config});assert.ok(plan.plan_id);

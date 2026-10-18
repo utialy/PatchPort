@@ -2,7 +2,10 @@
 
 Connect real Codex and Claude Code terminals, route completed replies, and review
 selected working-copy changes inside VS Code. Keep each CLI's authentication and
-permission settings. **Current version: 0.4.0. English UI. Windows x64.**
+permission settings. **Source version: 0.5.0. English UI. Native platform packages.**
+
+Build targets are Windows x64, glibc Linux x64/ARM64 and macOS Intel/Apple Silicon.
+See [native platforms](docs/PLATFORMS.md) for per-platform requirements and limits.
 
 ![PatchPort terminal board with mock AI terminals](docs/images/terminal-board.png)
 
@@ -46,7 +49,7 @@ cd extensions/vscode
 npm ci
 npm run package
 cd ../..
-code --install-extension .bridge/artifacts/patchport-0.4.0-win32-x64.vsix
+code --install-extension .bridge/artifacts/patchport-0.5.0-win32-x64.vsix
 ```
 
 The Python package is the extension's internal backend and build/test input.
@@ -72,6 +75,29 @@ Review and explicitly apply setup. In **Project work > Submit work**, inspect th
 input plan, queue a new task ID, and explicitly start the runner when ready.
 Then review changes in **Copies & recovery** before promoting selected paths.
 
+## Build on Linux or macOS
+
+Use Python 3.11+ and Node.js 24+ on the target OS and CPU. Linux source builds
+need a C++ compiler and make; packaged VSIX installation does not require Node.
+
+```sh
+git clone https://github.com/utialy/PatchPort.git
+cd PatchPort
+python3 -m venv .venv
+.venv/bin/python -m pip install .
+cd extensions/vscode
+npm ci
+npm run package
+```
+
+Install the target-specific VSIX printed by the package command through
+**Install from VSIX**. Set patchport.corePython to the absolute .venv/bin/python
+path. Default provider shells are Linux Bash and macOS Zsh. Native builds are
+separate from [measured platform validation](docs/VALIDATION.md).
+
+Batch/role body removal, connection-file removal and their guided cleanup
+stages remain Windows-only. Existing platform guards preserve those boundaries.
+
 ## Clean project data deliberately
 
 **Data & settings** distinguishes workspace configuration, copies, conversation
@@ -90,7 +116,7 @@ active or unconfirmed data remain protected. See [data management](docs/PROJECT_
 - [Architecture](docs/ARCHITECTURE.md), [validation](docs/VALIDATION.md), and [roadmap](docs/ROADMAP.md).
 - [Contributing](CONTRIBUTING.md): independent backend/extension tests and release policy.
 
-Remote/other-OS extension sessions, external-process handoff, additional providers,
+Remote extension hosts, Remote-WSL, external-process handoff, additional providers,
 actual charge enforcement and subscription quota reporting are not validated
 features. Delivery/claim/input limits use different units; missing usage is unknown.
 Real provider calls require explicit authorization and a stated call limit.

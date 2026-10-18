@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.0
+
+- Build native VSIX packages for Windows x64, glibc Linux x64/ARM64 and macOS Intel/Apple Silicon.
+- Select platform-appropriate default shells and Python commands while preserving explicit profiles.
+- Preserve POSIX path case and compare managed usage against the frozen physical working directory.
+- Verify native binary architecture, required executable helpers, package hashes and isolated Electron PTYs/extension hosts.
+- Keep existing Windows-only batch/role body and connection-file removal guards on other platforms.
+
+
 ## 0.4.0
 
 - Coordinate role launch receipt publication before child consumption while retaining one-use nonce checks.

@@ -1,17 +1,17 @@
-const test=require("node:test"),assert=require("node:assert/strict");
+const test=process.platform==='win32'?require('node:test'):require('node:test').skip,assert=require("node:assert/strict");
 const fs=require("node:fs"),path=require("node:path"),os=require("node:os");
 const {CoreClient}=require("../dist/test/core");
-const root=path.resolve(__dirname,".."),python=path.resolve(root,"../../.venv/Scripts/python.exe");
+const root=path.resolve(__dirname,".."),python=require('./helpers.cjs').python;
 const secret="PRIVATE_BATCH_BODY";
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function until(read){for(let i=0;i<160;i++){try{const value=await read();if(value)return value;}catch{}await sleep(50);}throw new Error("Fixture timed out");}
 async function fixture(t){
-  const project=fs.mkdtempSync(path.join(os.tmpdir(),"patchport-body-"));
+  const project=fs.mkdtempSync(path.join(require('./helpers.cjs').temporaryRoot,"patchport-body-"));
   const config=path.join(project,"bridge.json"),database=path.join(project,".agent-bridge/queue.sqlite3");
   fs.writeFileSync(path.join(project,"input.txt"),secret);
   fs.writeFileSync(config,JSON.stringify({project:".",include:["input.txt"],writable:["input.txt"],endpoints:{mock:{adapter:"command",command:[python,"-c",`print('${secret}')`]}}}));
   const core=new CoreClient(python,path.join(root,"core"));let runId;
-  t.after(async()=>{if(runId)await core.request("runner.stop",{config,run_id:runId,apply:true,cancel_active:true}).catch(()=>{});core.dispose();await sleep(150);assert.ok(path.resolve(project).startsWith(path.resolve(os.tmpdir())+path.sep));fs.rmSync(project,{recursive:true,force:true});});
+  t.after(async()=>{if(runId)await core.request("runner.stop",{config,run_id:runId,apply:true,cancel_active:true}).catch(()=>{});core.dispose();await sleep(150);assert.ok(path.resolve(project).startsWith(path.resolve(require('./helpers.cjs').temporaryRoot)+path.sep));fs.rmSync(project,{recursive:true,force:true});});
   assert.equal((await core.request("capabilities")).records_body_schema,1);
   const prepare=await core.request("records.prepare.preview",{project,config});assert.ok(prepare.plan_id);
   await core.request("records.apply",{plan_id:prepare.plan_id,apply:true});

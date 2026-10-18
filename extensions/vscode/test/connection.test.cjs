@@ -6,7 +6,7 @@ const { Router, defaultBoard } = require("../dist/test/model");
 const { SessionHost } = require("../dist/test/session");
 
 async function fixture(run) {
-  const project = path.resolve(__dirname, "../../../.bridge/vscode-connection-20261004/mock");
+  const project = path.resolve(__dirname, '../../../.bridge/cross-platform-tests/connection', `${process.platform}-${process.arch}`);
   const board = defaultBoard(); board.nodes = ["a", "b"].map(id => ({ id, name: `Claude ${id}`, provider: "claude", profileId: id, project, groupId: "team", x: 0, y: 0 }));
   const writes = []; const router = new Router(board, (id, text) => writes.push({ id, text }));
   const host = new SessionHost(router, project, path.resolve(__dirname, ".."));

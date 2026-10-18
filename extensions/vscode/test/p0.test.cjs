@@ -9,11 +9,11 @@ const { claudeUsage, codexUsage } = require("../dist/test/providerUsage");
 const { Router, defaultBoard } = require("../dist/test/model");
 const { SessionHost } = require("../dist/test/session");
 const root = path.resolve(__dirname, "..");
-const python = path.resolve(root, "../../.venv/Scripts/python.exe");
+const python = require('./helpers.cjs').python;
 const wait = async fn => { for (let i = 0; i < 600; i++) { if (fn()) return; await new Promise(r => setTimeout(r, 50)); } throw new Error("Timed out"); };
 
 test("core reads create nothing; records survive a new client and cumulative reports do not double count", async t => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "patchport-p0-")); t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const dir = await fs.mkdtemp(path.join(require('./helpers.cjs').temporaryRoot, "patchport-p0-")); t.after(() => fs.rm(dir, { recursive: true, force: true }));
   const core = new CoreClient(python, path.join(root, "core"));
   assert.ok((await core.request("capabilities")).actions.includes("usage"));
   const ledger = new Ledger(core, path.join(dir, "storage"));
@@ -38,7 +38,7 @@ test("core reads create nothing; records survive a new client and cumulative rep
 });
 
 test("provider usage deduplicates streamed messages and reads only the exact fresh Codex session", async t => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "patchport-usage-")); t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const dir = await fs.mkdtemp(path.join(require('./helpers.cjs').temporaryRoot, "patchport-usage-")); t.after(() => fs.rm(dir, { recursive: true, force: true }));
   const started = Date.now() - 1000, id = "11111111-1111-4111-8111-111111111111", transcript = path.join(dir, `${id}.jsonl`);
   const usage = { input_tokens: 10, output_tokens: 2, cache_read_input_tokens: 5, cache_creation_input_tokens: 1 };
   const message = { type: "assistant", sessionId: id, timestamp: new Date().toISOString(), message: { id: "m1", model: "fixture", usage } };
@@ -54,6 +54,8 @@ test("provider usage deduplicates streamed messages and reads only the exact fre
   await fs.writeFile(file, [meta, cumulative, cumulative].map(JSON.stringify).join("\n"));
   const codex = await codexUsage(dir, id, dir, started);
   assert.equal(codex.metrics.input_tokens, 100); assert.equal(codex.metrics.cache_read_tokens, 70); assert.equal(codex.metrics.cost_usd, null);
+  if (process.platform === 'win32') assert.equal((await codexUsage(dir, id, dir.toUpperCase(), started)).metrics.input_tokens, 100);
+  else await assert.rejects(codexUsage(dir, id, dir.toUpperCase(), started), /unrelated/);
   await fs.writeFile(file, [meta, cumulative, { ...cumulative, payload: { ...cumulative.payload, info: { total_token_usage: { input_tokens: 90 } } } }].map(JSON.stringify).join("\n"));
   await assert.rejects(codexUsage(dir, id, dir, started));
   await fs.writeFile(file, [ { ...meta, payload: { ...meta.payload, timestamp: "2020-01-01T00:00:00Z" } }, cumulative ].map(JSON.stringify).join("\n"));
@@ -61,7 +63,7 @@ test("provider usage deduplicates streamed messages and reads only the exact fre
 });
 
 test("real managed mock PTYs persist before delivery and stop on a database recording failure", { timeout: 60000 }, async t => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "patchport-pty-ledger-"));
+  const dir = await fs.mkdtemp(path.join(require('./helpers.cjs').temporaryRoot, "patchport-pty-ledger-"));
   const core = new CoreClient(python, path.join(root, "core")), ledger = new Ledger(core, path.join(dir, "ledger"));
   const board = defaultBoard(); board.groups[0].maxHops = 1;
   board.nodes = ["a", "b"].map((id, i) => ({ id, name: id, project: dir, provider: i ? "codex" : "claude", profileId: id, groupId: "team", x: 0, y: 0 }));
@@ -87,7 +89,7 @@ test("real managed mock PTYs persist before delivery and stop on a database reco
   await fs.writeFile(transcript, JSON.stringify({ type: "assistant", sessionId: managed.eventSession, timestamp: new Date().toISOString(), message: { id: "usage-message", model: "fixture", usage: { input_tokens: 10, output_tokens: 3, cache_read_input_tokens: 5, cache_creation_input_tokens: 1 } } }) + "\n");
   const statusPayload = { cwd: dir, session_id: managed.eventSession, transcript_path: transcript, model: { display_name: "fixture" }, cost: { total_cost_usd: 0.12 } };
   await new Promise((resolve, reject) => {
-    const child = execFile(path.join(process.env.SystemRoot, "System32/WindowsPowerShell/v1.0/powershell.exe"), ["-NoLogo", "-NoProfile", "-File", path.join(root, "media/statusline.ps1")], { env: { ...process.env, PATCHPORT_ENDPOINT: `http://127.0.0.1:${host.port}/events/a`, PATCHPORT_TOKEN: managed.token } }, error => error ? reject(error) : resolve());
+    const child = execFile(process.platform === 'win32' ? path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe') : process.execPath, process.platform === 'win32' ? ['-NoLogo', '-NoProfile', '-File', path.join(root, 'media/statusline.ps1')] : [path.join(root, 'media/statusline.cjs')], { env: { ...process.env, PATCHPORT_ENDPOINT: `http://127.0.0.1:${host.port}/events/a`, PATCHPORT_TOKEN: managed.token } }, error => error ? reject(error) : resolve());
     child.stdin.end(JSON.stringify(statusPayload));
   });
   const metered = await ledger.report(dir);

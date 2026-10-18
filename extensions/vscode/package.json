@@ -2,7 +2,7 @@
   "name": "patchport",
   "displayName": "PatchPort - AI Terminal Bridge",
   "description": "Control real AI terminals and connect Claude Code and Codex inside your VS Code workspace.",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "publisher": "utialy",
   "license": "MIT",
   "engines": {
@@ -98,9 +98,9 @@
       "properties": {
         "patchport.corePython": {
           "type": "string",
-          "default": "python",
+          "default": "",
           "scope": "machine",
-          "description": "Python 3.11+ executable for the bundled standard-library core. Use an absolute path to select a runtime. Reload the window after changing this setting."
+          "description": "Python 3.11+ for the bundled core. Leave empty for python on Windows or python3 on Linux/macOS. Use an absolute path to select a runtime; reload after changing it."
         },
         "patchport.profiles": {
           "type": "array",
@@ -147,7 +147,7 @@
                   "zsh",
                   "direct"
                 ],
-                "default": "powershell"
+                "default": "direct"
               },
               "shellPath": {
                 "type": "string"
@@ -166,7 +166,8 @@
     "build": "node scripts/build.cjs",
     "check": "tsc --noEmit",
     "test": "npm run build && node --test --test-concurrency=1 test/*.test.cjs",
-    "package": "npm run check && npm run build && node scripts/package.cjs"
+    "package": "npm run check && npm run build && node scripts/package.cjs",
+    "test:host": "node scripts/test-host.cjs"
   },
   "dependencies": {
     "node-pty": "1.1.0"
