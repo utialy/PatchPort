@@ -4,7 +4,14 @@ const {CoreClient}=require("../dist/test/core");
 const root=path.resolve(__dirname,".."),python=path.resolve(root,"../../.venv/Scripts/python.exe");
 const secret="PRIVATE_FLOW_BODY";
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
-async function until(read){for(let i=0;i<200;i++){try{const value=await read();if(value)return value;}catch{}await sleep(50);}throw new Error("Flow fixture timed out");}
+async function until(read,details=()=>'',deadline=Date.now()+20000){
+  let last;
+  while(Date.now()<deadline){
+    try{const value=await read();if(value)return value;}catch(error){last=error;if(!['ENOENT','EACCES','EBUSY'].includes(error.code)&&!String(error).includes('OPERATION_FAILED'))throw error;}
+    await sleep(50);
+  }
+  throw new Error('Flow fixture timed out: '+details()+' '+String(last||''));
+}
 async function fixture(t){
   const project=fs.mkdtempSync(path.join(os.tmpdir(),"patchport-flow-body-"));
   const config=path.join(project,"bridge.json"),database=path.join(project,".agent-bridge/queue.sqlite3"),script=path.join(project,"mock_codex.py");
@@ -22,7 +29,16 @@ async function fixture(t){
   }
   const submission=await core.request("roles.preview",{config,flow_id:"flow-a",prompt:secret});
   await core.request("operation.apply",{plan_id:submission.plan_id,apply:true});
-  const plan=await until(async()=>{const p=await core.request("records.flow.purge.preview",{project,config,flow_id:"flow-a"});return p.plan_id&&p;});
+  const receipt=path.join(project,'.agent-bridge/p1-jobs/flow-a.json'),log=path.join(project,'.agent-bridge/p1-jobs/flow-a.log');
+  const details=()=>[receipt,log].map(file=>{try{return fs.readFileSync(file,'utf8').slice(-4000);}catch(error){return String(error);}}).join('\n');
+  const deadline=Date.now()+20000;
+  await until(async()=>{
+    const ticket=JSON.parse(fs.readFileSync(receipt,'utf8'));
+    if(ticket.state==='FAILED')throw new Error('Flow fixture failed: '+details());
+    if(ticket.state!=='FINISHED')return false;
+    assert.equal(ticket.workflow_state,'REVIEW_DONE',details());return true;
+  },details,deadline);
+  const plan=await until(async()=>{const p=await core.request("records.flow.purge.preview",{project,config,flow_id:"flow-a"});return p.plan_id&&p;},details,deadline);
   assert.equal(plan.report.task_ids.length,2);assert.equal(plan.report.flow,"flow-a");
   const before=(await core.request("project.inspect",{project,config})).control.control;
   assert.equal(before.calls_started,2);

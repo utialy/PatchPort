@@ -166,7 +166,7 @@ class RecordsFlowTests(unittest.TestCase):
         endpoint=dict(adapter='codex',command=[sys.executable,str(script)],sandbox='read-only')
         atomic_json(self.root/'role_workflow.json',dict(developer=endpoint,reviewer=endpoint,checks=[[sys.executable,'-c','pass']]))
         preview=self.call('roles.preview',config=str(self.root/'bridge.json'),flow_id='p1-flow',prompt=SECRET)
-        launch=p1.child.start_background; observed=self.root/'start-contention.observed'
+        launch=p1.child.start_background; observed=self.root/'start-contention.observed'; processes=[]
         script_code="""import sys
 from pathlib import Path
 from agent_bridge import role_job
@@ -183,6 +183,7 @@ raise SystemExit(role_job.main(sys.argv[2:]))
         def concurrent_launch(argv,cwd,log,env):
             args=argv[argv.index('agent_bridge.role_job')+1:]
             process=launch([argv[0],'-B','-X','utf8','-c',script_code,str(observed),*args],cwd,log,env)
+            processes.append(process)
             deadline=time.monotonic()+10
             while not observed.exists() and process.poll() is None and time.monotonic()<deadline:time.sleep(.02)
             self.assertTrue(observed.exists(),log.read_text(encoding='utf-8'))
@@ -196,6 +197,7 @@ raise SystemExit(role_job.main(sys.argv[2:]))
             if value['writer_state']=='CLOSED': break
             time.sleep(.05)
         self.assertEqual(value['writer_state'],'CLOSED',(self.config['state']/'p1-jobs/p1-flow.log').read_text(encoding='utf-8'))
+        self.assertEqual(processes[0].wait(timeout=10),0)
         ticket=json.loads((self.config['state']/'p1-jobs/p1-flow.json').read_text())
         self.assertEqual(ticket['state'],'FINISHED',ticket); self.assertEqual(ticket['workflow_state'],'REVIEW_DONE',ticket)
         controls=Store(self.config['state']).control(); self.assertEqual(controls['calls_started'],2)
