@@ -37,6 +37,8 @@ Release-local measurements are recorded after execution below.
   selected-folder alias for PTY cwd validation, while rejecting other folders.
   Writer/runner tests wait for actual shutdown; native integration test workers
   run sequentially without removing their explicit concurrency checks.
+- A real role-job regression forces parent/child start-lock contention and checks
+  one-use acceptance, both mock roles, final writer closure and payload removal.
 
 ## Platform boundaries
 

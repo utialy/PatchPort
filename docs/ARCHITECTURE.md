@@ -19,6 +19,12 @@ queue/runner contract. Fixed helpers perform development, host checks, independe
 read-only review, explicit promotion/recovery and deletion-free archive operations.
 Windows launcher PID and actual Python job PID are distinguished.
 
+An accepted child waits up to 15 seconds for the parent's start-lock handoff
+before reading its launch receipt, then verifies the one-use nonce/configuration.
+This coordinates one already launched process; it never relaunches a provider or
+failed workflow. A real-process regression forces lock contention before the
+parent publishes acceptance and verifies completion/cleanup with the same ID.
+
 Atomic workspace snapshots preserve board/config, paused groups, round/counts and
 history with corruption/other-writer protection. Restart neither starts an AI nor
 resends uncertain input. Exact recorded provider UUID resume and runtime integrity

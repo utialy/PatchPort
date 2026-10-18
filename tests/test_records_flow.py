@@ -166,14 +166,36 @@ class RecordsFlowTests(unittest.TestCase):
         endpoint=dict(adapter='codex',command=[sys.executable,str(script)],sandbox='read-only')
         atomic_json(self.root/'role_workflow.json',dict(developer=endpoint,reviewer=endpoint,checks=[[sys.executable,'-c','pass']]))
         preview=self.call('roles.preview',config=str(self.root/'bridge.json'),flow_id='p1-flow',prompt=SECRET)
-        accepted=self.call('operation.apply',plan_id=preview['plan_id'],apply=True)
+        launch=p1.child.start_background; observed=self.root/'start-contention.observed'
+        script_code="""import sys
+from pathlib import Path
+from agent_bridge import role_job
+from agent_bridge.storage import FileLock
+class ObservedLock(FileLock):
+    def __enter__(self):
+        try: return super().__enter__()
+        except RuntimeError:
+            Path(sys.argv[1]).write_text('lock contention observed')
+            raise
+role_job.FileLock=ObservedLock
+raise SystemExit(role_job.main(sys.argv[2:]))
+"""
+        def concurrent_launch(argv,cwd,log,env):
+            args=argv[argv.index('agent_bridge.role_job')+1:]
+            process=launch([argv[0],'-B','-X','utf8','-c',script_code,str(observed),*args],cwd,log,env)
+            deadline=time.monotonic()+10
+            while not observed.exists() and process.poll() is None and time.monotonic()<deadline:time.sleep(.02)
+            self.assertTrue(observed.exists(),log.read_text(encoding='utf-8'))
+            return process
+        with patch.object(p1.child,'start_background',side_effect=concurrent_launch):
+            accepted=self.call('operation.apply',plan_id=preview['plan_id'],apply=True)
         self.assertEqual(accepted['state'],'ACCEPTED')
         deadline=time.monotonic()+20
         while time.monotonic()<deadline:
             value=flow.status(self.config,'p1-flow',live=True)
             if value['writer_state']=='CLOSED': break
             time.sleep(.05)
-        self.assertEqual(value['writer_state'],'CLOSED')
+        self.assertEqual(value['writer_state'],'CLOSED',(self.config['state']/'p1-jobs/p1-flow.log').read_text(encoding='utf-8'))
         ticket=json.loads((self.config['state']/'p1-jobs/p1-flow.json').read_text())
         self.assertEqual(ticket['state'],'FINISHED',ticket); self.assertEqual(ticket['workflow_state'],'REVIEW_DONE',ticket)
         controls=Store(self.config['state']).control(); self.assertEqual(controls['calls_started'],2)
