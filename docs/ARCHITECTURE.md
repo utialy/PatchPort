@@ -94,6 +94,12 @@ resumes the same child operation; receipt-only finalization never repeats deleti
 Residual counts retain unknown values and distinguish preserved controls/backups
 from forensic erasure. See [data management](PROJECT_DATA.md).
 
+Receipt queries validate links and canonicalize selected project/database paths
+before matching stored ownership, including Windows 8.3 aliases. A managed PTY
+freezes the selected physical cwd at start and accepts its reported canonical or
+original path without reading arbitrary provider-supplied locations. Another cwd
+still stops automatic delivery.
+
 The public product is the VS Code extension. The Python package and fixed helpers
 are its internal backend/build inputs. Standalone desktop applications and OS
 installers are not included. Service registration detection remains in the backend

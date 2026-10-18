@@ -112,7 +112,7 @@ test("inventory through the actual core pipe preserves separate fallback and bat
   const before = fs.readFileSync(database);
   const report = await core.request("project.data.inspect", { project: f.a, databases: candidates });
   assert.equal(report.schema, 1); assert.equal(report.blockers.length, 0);
-  assert.equal(report.databases.find(item => item.path.toLowerCase() === database.toLowerCase()).interactive.sessions, 1);
+  assert.equal(report.databases.find(item => item.path.toLowerCase() === fs.realpathSync.native(database).toLowerCase()).interactive.sessions, 1);
   assert.deepEqual(fs.readFileSync(database), before); assert.equal(fs.existsSync(path.join(f.a, ".agent-bridge")), false);
   ledger.forget(f.a); assert.equal(ledger.binding(f.a), undefined); assert.deepEqual(fs.readFileSync(database), before);
 });

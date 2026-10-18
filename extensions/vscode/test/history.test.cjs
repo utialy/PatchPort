@@ -47,7 +47,9 @@ test("writer pipe remains pinned while idle; paired purge preserves usage and in
 
 test("lost writer pipe cannot silently reconnect or regain deletion eligibility", async t => {
   const f = await fixture(t), id = await f.ledger.start(f.node("a"));
-  f.core.dispose(); await delay(150);
+  const writer = f.core.child;
+  const exited = new Promise((resolve, reject) => { const timer = setTimeout(() => reject(new Error('Writer did not exit')), 15000); writer.once('exit', () => { clearTimeout(timer); resolve(); }); });
+  f.core.dispose(); await exited;
   await assert.rejects(f.ledger.record("a", "completed", { answer: "late" }), /lost/);
   const preview = await f.observer.request("history.purge.preview", { ...f.scope, session_ids: [id] });
   assert.equal(preview.plan_id, null); assert.ok(preview.report.blockers.includes("WRITER_LOST"));

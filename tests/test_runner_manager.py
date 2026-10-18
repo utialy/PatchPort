@@ -173,6 +173,8 @@ class ManagerTests(unittest.TestCase):
         result, code = stop(self.config, self.run_id, cancel=True, timeout=.001)
         self.assertIn(code, (0, 2))
         self.until(lambda: store.rows()[0]['state'] == 'CANCELLED')
+        self.until(lambda: (status := inspect(self.config))['management'] is not None
+                   and status['management']['mode'] == 'STOPPED' and not status['lock_held'])
         self.assertEqual(stop(self.config, self.run_id)[1], 0)
         self.assertEqual(store.control()['calls_started'], 1)
 

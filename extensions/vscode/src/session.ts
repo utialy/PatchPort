@@ -10,7 +10,7 @@ import { NodeConfig, Profile, Router, cleanMessage, inputIntent, MAX_TEXT } from
 import { Ledger } from "./core";
 import { Sample, claudeUsage, codexUsage, statusCost, unknownMetrics } from "./providerUsage";
 
-export interface Running { process: pty.IPty; token: string; node: NodeConfig; profile: Profile; output: string; screen: HeadlessTerminal; serializer: SerializeAddon; sequence: number; turn: number; eventSession?: string; disposed: boolean; pasteTimer?: NodeJS.Timeout; startedAt: number; usageSequence: number; samples: Map<string, Sample>; transcript?: string; codexHome?: string; costBaseline: number | null; lastCost: number | null; cost: number | null; usageKey?: string; seen: Set<string> }
+export interface Running { process: pty.IPty; token: string; node: NodeConfig; cwd?: string; profile: Profile; output: string; screen: HeadlessTerminal; serializer: SerializeAddon; sequence: number; turn: number; eventSession?: string; disposed: boolean; pasteTimer?: NodeJS.Timeout; startedAt: number; usageSequence: number; samples: Map<string, Sample>; transcript?: string; codexHome?: string; costBaseline: number | null; lastCost: number | null; cost: number | null; usageKey?: string; seen: Set<string> }
 const psQuote = (s: string) => `'${s.replace(/'/g, "''")}'`;
 const shQuote = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
 
@@ -81,6 +81,7 @@ export class SessionHost extends EventEmitter {
     try {
       await this.initialize();
       if (!(await fs.stat(node.project)).isDirectory()) throw new Error("The project folder is missing.");
+      const cwd = await fs.realpath(node.project);
       if (profile.profilePath && !(await fs.stat(profile.profilePath)).isFile()) throw new Error("The profile file is missing.");
       if (this.ledger) await this.ledger.start(node);
       const token = randomBytes(32).toString("hex");
@@ -112,7 +113,7 @@ export class SessionHost extends EventEmitter {
       const child = pty.spawn(invocation.file, invocation.args, { name: "xterm-256color", ...size, cwd: node.project, env, useConpty: true });
       const screen = new HeadlessTerminal({ ...size, scrollback: 2000, allowProposedApi: true });
       const serializer = new SerializeAddon(); screen.loadAddon(serializer as unknown as ITerminalAddon);
-      const session: Running = { process: child, token, node, profile, output: "", screen, serializer, sequence: 0, turn: 0, disposed: false, startedAt: Date.now(), usageSequence: 0, samples: new Map(), costBaseline: 0, lastCost: null, cost: null, seen: new Set() };
+      const session: Running = { process: child, token, node, cwd, profile, output: "", screen, serializer, sequence: 0, turn: 0, disposed: false, startedAt: Date.now(), usageSequence: 0, samples: new Map(), costBaseline: 0, lastCost: null, cost: null, seen: new Set() };
       this.sessions.set(node.id, session);
       screen.onData(data => { if (!session.disposed) { try { child.write(data); } catch { /* Process exit can race a terminal status query. */ } } });
       child.onData(data => {
@@ -145,8 +146,9 @@ export class SessionHost extends EventEmitter {
   private async event(session: Running, payload: unknown): Promise<Record<string, unknown> | void> {
     if (session.disposed || !payload || typeof payload !== "object") return;
     const p = payload as Record<string, unknown>;
+    const cwd = typeof p.cwd === "string" ? path.resolve(p.cwd).toLowerCase() : undefined;
     const id = session.node.id;
-    if (typeof p.cwd === "string" && path.resolve(p.cwd).toLowerCase() !== path.resolve(session.node.project).toLowerCase()) { this.router.setPhase(id, "attention", "Working directory changed; automatic delivery stopped."); return; }
+    if (cwd !== undefined && ![session.cwd, session.node.project].some(project => project && cwd === path.resolve(project).toLowerCase())) { this.router.setPhase(id, "attention", "Working directory changed; automatic delivery stopped."); return; }
     if (session.profile.provider === "claude") {
       if (typeof p.session_id !== "string") throw new Error("Missing session identity");
       if (session.eventSession && session.eventSession !== p.session_id) {

@@ -165,7 +165,7 @@
   "scripts": {
     "build": "node scripts/build.cjs",
     "check": "tsc --noEmit",
-    "test": "npm run build && node --test test/*.test.cjs",
+    "test": "npm run build && node --test --test-concurrency=1 test/*.test.cjs",
     "package": "npm run check && npm run build && node scripts/package.cjs"
   },
   "dependencies": {

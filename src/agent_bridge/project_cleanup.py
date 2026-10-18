@@ -98,6 +98,7 @@ def primary(project,database):
 
 
 def load(project,database,operation):
+    project=checked_local_path(project); database=checked_local_path(database,project)
     meta=primary(project,database); identifier(operation)
     db=read_journals(database)
     if db is None: fail('OPERATION_MISSING')

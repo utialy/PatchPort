@@ -156,5 +156,16 @@ class ProjectCleanupTests(unittest.TestCase):
         reply=self.request('cleanup.operation',**self.receipt(result['operation']))
         self.assertFalse(reply['ok']);self.assertEqual(reply['problem']['code'],'OPERATION_IDENTITY_CHANGED')
 
+    def test_receipt_accepts_verified_windows_short_path_alias(self):
+        import ctypes
+        buffer=ctypes.create_unicode_buffer(32768)
+        length=ctypes.windll.kernel32.GetShortPathNameW(str(self.root),buffer,len(buffer))
+        self.assertGreater(length,0)
+        alias=Path(buffer.value)
+        if str(alias).casefold()==str(self.root).casefold():self.skipTest('Volume has no distinct 8.3 alias')
+        result=self.apply(self.preview(dict(paths=['bridge.py'])))
+        queried=self.call('cleanup.operation',project=str(alias),database=str(alias/'.agent-bridge/queue.sqlite3'),operation=result['operation'])
+        self.assertTrue(queried['scope_complete']);self.assertEqual(Path(queried['project']),self.root)
+
 
 if __name__=='__main__':unittest.main()

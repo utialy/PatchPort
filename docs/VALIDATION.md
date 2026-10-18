@@ -20,8 +20,8 @@ Release-local measurements are recorded after execution below.
 
 ## Measured on Windows, 2026-10-18
 
-- Python 3.14.6: 535 backend/policy tests, 534 passed and one platform skip.
-- Node.js 24.14.0: extension type checking/build and all 59 tests passed.
+- Python 3.14.6: 536 backend/policy tests, 535 passed and one platform skip.
+- Node.js 24.14.0: extension type checking/build and all 60 tests passed.
 - VS Code 1.142.0 with a fresh isolated profile: actual controller and bundled
   core, English Chrome views at 1500x1000 and 1000x760, four separately reviewed
   cleanup stages, partial metadata failure after configuration removal,
@@ -33,6 +33,10 @@ Release-local measurements are recorded after execution below.
   activation and configuration-free cleanup result lookup passed.
 - Public tree/encoding/local links and nine focused policy tests passed. These
   local results do not claim unexecuted remote CI jobs or native provider checks.
+- Follow-up regressions use a real Windows 8.3 path for receipt lookup and a
+  selected-folder alias for PTY cwd validation, while rejecting other folders.
+  Writer/runner tests wait for actual shutdown; native integration test workers
+  run sequentially without removing their explicit concurrency checks.
 
 ## Platform boundaries
 
