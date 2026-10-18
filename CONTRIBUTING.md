@@ -14,7 +14,9 @@ Keep changes focused. Preserve public commands, the SQLite claim boundary, recov
 
 Write English prose. Comments should explain a constraint or decision that is not clear from the code. Unicode behavior tests may use escaped literals with the original runtime payload. Do not translate test data into ASCII if that removes the behavior under test.
 
-Follow [commit rules](docs/COMMIT_RULES.md). To enable the repository hooks for this checkout:
+Use an English Conventional Commit subject, such as `fix: preserve cleanup receipts`.
+Describe the problem, resulting behavior and checks in pull requests. Run the
+relevant tests and review `git diff --check` before submitting.
 
 For the Windows extension, use Node.js 24+ and an installed Python 3.11+ runtime
 in the checkout's .venv. From extensions/vscode run `npm ci`, `npm run check`,
@@ -23,14 +25,9 @@ VSIX artifacts are excluded from commits. Screenshots use controlled mock data,
 generic paths and reviewed PNGs under docs/images; never capture live credentials
 or user conversations. See the [extension guide](docs/VSCODE_GUIDE.md).
 
-```sh
-git config --local core.hooksPath .githooks
-```
-
-The hooks use Python 3.11+ and Git. They inspect content and commit messages; they do not run providers, install packages, or push commits. Run the relevant tests before committing. Hooks are local checks, not a security boundary; CI runs the content policy again.
+CI runs the content policy and tests. Keep credentials, provider logs, operational
+state, private development notes and generated artifacts out of contributions.
 
 The Python package is the extension's internal management backend. Keep its
 entry points and helper assets working, but distribute the product as a VSIX.
 The public tree does not contain a separate desktop app or OS installer.
-
-Maintainers importing reviewed patches from a separate checkout should follow [the update workflow](docs/MAINTAINER_UPDATES.md). This repository remains independently buildable; private development records are not required.

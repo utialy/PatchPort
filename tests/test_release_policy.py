@@ -27,6 +27,12 @@ class ReleasePolicyTests(unittest.TestCase):
         self.assertTrue(policy.check_content('docs/images/board.png', b'not a PNG'))
         self.assertTrue(policy.check_content('docs/images/board.png', data[:-1]))
         self.assertTrue(policy.check_content('docs/images/board.png', data + b'unreviewed'))
+        for kind, body in ((b'bKGD', b'\x00' * 6), (b'tIME', struct.pack('>HBBBBB', 2026, 10, 18, 12, 0, 0))):
+            chunk = struct.pack('>I', len(body)) + kind + body + struct.pack('>I', zlib.crc32(kind + body) & 0xffffffff)
+            unreviewed = data[:-12] + chunk + data[-12:]
+            with self.subTest(metadata=kind):
+                self.assertTrue(policy.check_content('extensions/vscode/media/symbol.png', unreviewed))
+                self.assertTrue(policy.check_content('docs/images/board.png', unreviewed))
 
     def test_extension_layout_keeps_generated_and_private_files_excluded(self):
         self.assertEqual(policy.check_content('extensions/vscode/src/example.ts', b'export const value = 1;\n'), [])
@@ -35,16 +41,10 @@ class ReleasePolicyTests(unittest.TestCase):
         self.assertTrue(policy.check_content('extensions/vscode/runtime-manifest.json', b'{}'))
         self.assertTrue(policy.check_content('extensions/vscode/dist/bundle.js', b'value = 1;'))
 
-    def test_valid_commit_message(self):
-        self.assertEqual(policy.check_message('fix(archive): reject corrupt blobs\n\nValidate the digest before reading evidence.\n'), [])
-
-    def test_invalid_commit_messages(self):
-        for message in ('', 'update files', 'fix: x\nbody', 'fix: '+('a'*80), 'docs: '+chr(0xD55C)):
-            with self.subTest(message=message):
-                self.assertTrue(policy.check_message(message))
-
     def test_private_paths_rejected(self):
-        for name in ('.env', '.bridge/events.jsonl', 'docs/HANDOFF.md', 'src/__pycache__/a.pyc', '../outside.md'):
+        for name in ('.env', '.bridge/events.jsonl', 'docs/HANDOFF.md', 'src/__pycache__/a.pyc', '../outside.md',
+                     'AGENTS.md', 'CLAUDE.md', 'docs/MAINTAINER_UPDATES.md', 'docs/COMMIT_RULES.md',
+                     '.githooks/pre-commit', '.githooks/commit-msg'):
             with self.subTest(name=name):
                 self.assertTrue(policy.check_content(name, b'English text\n'))
 
@@ -57,7 +57,7 @@ class ReleasePolicyTests(unittest.TestCase):
 
     def test_link_check_uses_repository_files(self):
         files = {name:b'English\n' for name in policy.REQUIRED}
-        files['README.md'] = b'[Rules](docs/COMMIT_RULES.md)\n'
+        files['README.md'] = b'[Contributing](CONTRIBUTING.md)\n'
         self.assertEqual(policy.check_files(files), [])
         files['README.md'] = b'[Missing](../private.md)\n'
         self.assertTrue(any('unresolved' in error for error in policy.check_files(files)))
