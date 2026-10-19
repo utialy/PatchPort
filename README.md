@@ -7,6 +7,8 @@ permission settings. **Source version: 0.5.0. English UI. Native platform packag
 Build targets are Windows x64, glibc Linux x64/ARM64 and macOS Intel/Apple Silicon.
 See [native platforms](docs/PLATFORMS.md) for per-platform requirements and limits.
 
+Marketplace listing: [PatchPort on Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=utialy.patchport).
+
 ![PatchPort terminal board with mock AI terminals](docs/images/terminal-board.png)
 
 The screenshots use controlled demo data, not real provider responses or usage.

@@ -52,3 +52,7 @@ the board. Tests use controlled mock providers; no live AI invocation is require
 See [validation](VALIDATION.md) for measured results. A configured CI matrix alone
 is not evidence that its native jobs passed. Build outputs and test profiles are
 excluded from commits; the workflow publishes generated VSIX files as CI artifacts.
+
+All five native jobs passed their actual installed-host checks in the
+[measured 0.5.0 CI run](https://github.com/utialy/PatchPort/actions/runs/39257939497).
+Tests used controlled mock providers, not live CLI authentication or billable calls.

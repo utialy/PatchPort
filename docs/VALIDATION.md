@@ -1,8 +1,8 @@
 # Validation
 
-## Current extension 0.4.0
+## Current extension 0.5.0
 
-The product is the English Windows x64 VS Code extension. Tests use new temporary
+The product is the English native VS Code extension. Tests use new temporary
 projects and controlled mock providers; no real provider call is part of the
 release checks. Backend tests require an isolated installed package as well as
 the source tree. Generated runtimes, virtual environments, logs and VSIX artifacts
@@ -10,7 +10,7 @@ are excluded from commits.
 
 Run the independent checks described in [CONTRIBUTING](../CONTRIBUTING.md): Python
 unittest discovery, public tree/staged policy, extension type checking/tests, and
-VSIX packaging. The Windows extension requires Python 3.11+ and Node.js 24+ for
+VSIX packaging. The native extension requires Python 3.11+ and Node.js 24+ for
 source builds. Its VSIX includes the core/helpers, not the interpreter.
 
 Coverage includes explicit project selection, copy and body cleanup, writer/SQL
@@ -18,7 +18,35 @@ guards, response-loss receipt lookup, same-operation I/O resume, config-free
 connection results, usage/ID/original/backup retention and host restoration.
 Release-local measurements are recorded after execution below.
 
-## Measured on Windows, 2026-10-18
+## Native measurements, 2026-10-19
+
+[CI for the measured source](https://github.com/utialy/PatchPort/actions/runs/39257939497)
+passed all 17 jobs: 12 core OS/Python combinations and five native extension jobs.
+Each native job built its own VSIX, checked binary architecture and hashes,
+installed it into an isolated profile, ran its PTY inside VS Code Electron,
+activated the installed extension and opened the board.
+
+| Native target | Extension tests | Installed host |
+| --- | --- | --- |
+| win32-x64 | 63 passed, 1 POSIX-only skip | VS Code 1.142.0, Electron 43.7.7 |
+| linux-x64 | 54 passed, 10 Windows-only skips | VS Code 1.142.0, Electron 43.7.7 |
+| linux-arm64 | 54 passed, 10 Windows-only skips | VS Code 1.142.0, Electron 43.7.7 |
+| darwin-x64 | 54 passed, 10 Windows-only skips | VS Code 1.142.0, Electron 43.7.7 |
+| darwin-arm64 | 54 passed, 10 Windows-only skips | VS Code 1.142.0, Electron 43.7.7 |
+
+Native jobs also passed three binary-architecture regressions. All five VSIX
+files and host receipts were downloaded and rechecked against the measured Git
+source: 42 Python files each, target-specific native inventory, executable macOS
+helper and the exact 1024x1024 source icon. No retired installer modules occur.
+Windows and WSL Linux x64 also passed local isolated-host checks. WSL results are
+separate from the independent Linux CI jobs. All providers in these checks were
+controlled mocks; real AI calls were zero.
+
+Earlier macOS candidate runs exposed helper executable-mode preparation and a
+test tool's assumed app executable name. Build-time native preparation and app
+metadata resolution fixed those issues before the measured successful run.
+
+## Earlier 0.4.0 Windows measurements, 2026-10-18
 
 - Python 3.14.6: 536 backend/policy tests, 535 passed and one platform skip.
 - Node.js 24.14.0: extension type checking/build and all 60 tests passed.
@@ -42,10 +70,11 @@ Release-local measurements are recorded after execution below.
 
 ## Platform boundaries
 
-The extension currently supports validated local Windows x64 use. Remote/WSL/macOS
-extension sessions and native provider/service/first-use checks on other systems
-are not implied by portable core tests or a CI matrix. Windows-specific deletion
-tests skip on other platforms. Missing usage remains unknown.
+Native build and installed-host checks cover the five local targets above.
+Remote extension hosts, Remote-WSL, Alpine/musl and native provider/service/
+clean-machine first-use checks remain outside these measurements. Windows-only
+batch/role body removal, connection-file removal and their guided stages retain
+their platform guards. Missing usage remains unknown. See [platforms](PLATFORMS.md).
 
 No cleanup check establishes forensic disk erasure or deletion of provider-side
 history. Historical/private/shared data, unknown writers, recovery evidence and
