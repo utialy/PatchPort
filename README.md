@@ -124,3 +124,7 @@ Real provider calls require explicit authorization and a stated call limit.
 MIT license. The source repository and a local VSIX build do not imply a
 Marketplace publication. Operational services and user installations are never
 replaced automatically.
+
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/888a1b3f-a3a0-4770-9742-15e044627587" alt="Logo" width="200" height="auto">
+</p>
