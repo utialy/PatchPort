@@ -8,6 +8,8 @@ const packagedSymbol = path.join(root, "media/symbol.png");
 if (fs.existsSync(symbol)) fs.copyFileSync(symbol, packagedSymbol);
 if (!fs.existsSync(packagedSymbol)) throw new Error("The distribution icon media/symbol.png is missing.");
 require("./patch-nodepty.cjs");
+const { nativeTarget, prepareNative } = require("./native-package.cjs");
+prepareNative(root, nativeTarget());
 fs.mkdirSync("dist", { recursive: true });
 const coreParent = path.join(root, "core"), coreDirectory = path.join(coreParent, "agent_bridge");
 if (path.relative(root, coreDirectory) !== path.join("core", "agent_bridge") ||
