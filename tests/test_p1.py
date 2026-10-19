@@ -173,7 +173,8 @@ class P1Tests(unittest.TestCase):
         Store(self.config['state']).set_limit(2)
         preview = self.success('roles.preview', config=str(self.path), flow_id='flow1', prompt='Change the value')
         self.assertEqual(preview['report']['max_provider_calls'], 2)
-        self.apply(preview)
+        with patch.object(p1.secrets, 'token_urlsafe', return_value='-role-launch-test-nonce'):
+            self.apply(preview)
         result_file = self.root / '.role-flows/flow1/result.json'
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:

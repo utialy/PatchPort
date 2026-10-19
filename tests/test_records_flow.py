@@ -188,7 +188,8 @@ raise SystemExit(role_job.main(sys.argv[2:]))
             while not observed.exists() and process.poll() is None and time.monotonic()<deadline:time.sleep(.02)
             self.assertTrue(observed.exists(),log.read_text(encoding='utf-8'))
             return process
-        with patch.object(p1.child,'start_background',side_effect=concurrent_launch):
+        with patch.object(p1.child,'start_background',side_effect=concurrent_launch), \
+                patch.object(p1.secrets,'token_urlsafe',return_value='-role-launch-test-nonce'):
             accepted=self.call('operation.apply',plan_id=preview['plan_id'],apply=True)
         self.assertEqual(accepted['state'],'ACCEPTED')
         deadline=time.monotonic()+20

@@ -230,7 +230,7 @@ def start_role(config, args, expected):
         with child.external_environment() as env:
             env.update(PYTHONPATH=str(Path(__file__).resolve().parent.parent), PYTHONDONTWRITEBYTECODE='1', PYTHONIOENCODING='utf-8')
             process = child.start_background([sys.executable, '-B', '-X', 'utf8', '-m', 'agent_bridge.role_job',
-                                              '--config', str(config['config_path']), '--id', flow_id, '--nonce', ticket['launch_nonce']],
+                                              '--config', str(config['config_path']), '--id', flow_id, '--nonce=' + ticket['launch_nonce']],
                                               config['root'], root / (flow_id + '.log'), env)
         atomic_json(receipt, dict(ticket, state='ACCEPTED', pid=process.pid, automatic_retry=False))
         threading.Thread(target=process.wait, daemon=True).start()
