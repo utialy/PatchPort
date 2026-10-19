@@ -1,132 +1,151 @@
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/888a1b3f-a3a0-4770-9742-15e044627587" alt="PatchPort logo" width="200" height="auto">
+</p>
+
 # PatchPort for VS Code
 
-Connect real Codex and Claude Code terminals, route completed replies, and review
-selected working-copy changes inside VS Code. Keep each CLI's authentication and
-permission settings. **Source version: 0.5.0. English UI. Native platform packages.**
+**Put your AI terminals on one board. Connect their replies. Review their changes.**
 
-Build targets are Windows x64, glibc Linux x64/ARM64 and macOS Intel/Apple Silicon.
-See [native platforms](docs/PLATFORMS.md) for per-platform requirements and limits.
+PatchPort brings real **Codex CLI** and **Claude Code** terminals into VS Code.
+You can type into each terminal as usual, then draw an arrow to send one AI's
+completed reply to another. Your existing CLI login and permission settings stay
+in use.
 
-Marketplace listing: [PatchPort on Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=utialy.patchport).
+[Install from Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=utialy.patchport)
+| [Step-by-step guide](docs/VSCODE_GUIDE.md)
+| [Build from source](docs/VSCODE_GUIDE.md#build-from-source)
+| [Roadmap](docs/ROADMAP.md)
 
-![PatchPort terminal board with mock AI terminals](docs/images/terminal-board.png)
+![Two managed AI terminals connected on the PatchPort board](docs/images/terminal-board.png)
 
-The screenshots use controlled demo data, not real provider responses or usage.
+Screenshots show an earlier English Windows build with controlled demo data,
+not live provider responses or account usage. This README describes source
+**0.5.0**; the Marketplace listing's published version can differ.
 
-## What you can do
+## What would I use it for?
 
-| Workflow | Behavior |
+Suppose you want Claude to propose an approach and Codex to question it. Open both
+on the board, connect Claude's output to Codex's input, and ask Claude to explain
+the approach to its peer. PatchPort passes the completed reply along the arrow.
+You can follow the discussion and handle each CLI's approval prompts yourself.
+
+For file changes, you can choose a separate workflow: give an AI selected files
+in a working copy, inspect the diff, and apply only the paths you approve.
+
+| Your goal | Start here | Where work happens |
+| --- | --- | --- |
+| Talk to an AI or connect two AI conversations | Terminal board | Original project directory, under the CLI's permissions |
+| Request a change and review it before applying | Project work > Submit work | Selected working copy; promotion to the original is explicit |
+| Run development, project tests and a separate AI review | Project work > Roles & archives | Role working copies with saved results and test evidence |
+| Read saved answers and reported usage | Jobs & usage | Existing project records |
+
+**A board terminal is a real terminal in your original project.** Drawing an
+arrow does not isolate file edits. Choose the copy workflow when you want to
+review proposed changes before applying them.
+
+## Install and open the board
+
+You need local desktop **VS Code**, **Python 3.11+**, and the official provider
+CLI(s) you want to use. Install and sign in to each CLI through its own setup:
+[Codex CLI](https://learn.chatgpt.com/docs/codex/cli) /
+[Claude Code](https://code.claude.com/docs/en/quickstart).
+
+1. Install **PatchPort** from the
+   [Marketplace](https://marketplace.visualstudio.com/items?itemName=utialy.patchport).
+   If you already have a matching native `.vsix`, use
+   **Extensions > ... > Install from VSIX** instead.
+2. Open a local project folder you trust. Press `Ctrl+Shift+P` on Windows/Linux
+   or `Cmd+Shift+P` on macOS, then run **PatchPort: Open AI Terminal Board**.
+3. If Python cannot be found, open VS Code Settings, search for
+   `patchport.corePython`, and select the **Python executable**, not a folder.
+   Finish any managed terminal work before running **Developer: Reload Window**.
+
+The default Python command is `python` on Windows and `python3` on Linux/macOS.
+The VSIX includes the Python core and workflow helpers; it does not include a
+Python interpreter or the provider CLIs. **Node.js and Git are build tools;
+you do not need them just to install a completed VSIX.**
+
+### Connect your first two terminals
+
+1. Click **+ AI terminal**, choose a provider profile, project and group, then
+   **Start terminal**. Complete its normal login/startup/approval prompts.
+2. Add a second AI terminal in the **same project and group**. When each CLI is
+   at an empty prompt, click **Ready to receive** on its card.
+3. Click the first card's right **Output port**, then the second card's left
+   **Input port**. Begin with one arrow.
+4. In **Groups > Settings**, set **Automatic delivery limit** to `2` and
+   **Message hop limit** to `2`. For a discussion-only trial, set the shared
+   goal to ask for comments without editing files or running tools. Click
+   **Resume routes** for that group.
+5. Ask the first AI to explain a small idea to the connected peer. Click outside
+   the terminal after submitting so focus does not hold delivery. Check
+   **Delivery history** when its answer finishes.
+
+You should see the finished reply arrive as a new request in the second terminal.
+Only a second arrow sends that AI's reply back. **Pause routes** pauses delivery;
+**Stop** ends a terminal. Provider requests can consume your account's allowance.
+See the [full walkthrough](docs/VSCODE_GUIDE.md#make-your-first-connection) for
+the example prompt, route states and stopping controls.
+
+## Next: request a change in a copy
+
+The copy workflow needs a connected project (`bridge.json`). Install the Python
+backend from this repository into a separate environment and run its setup
+wizard with the same interpreter selected in `patchport.corePython`.
+The [copy-work tutorial](docs/VSCODE_GUIDE.md#request-a-change-in-a-working-copy)
+includes the commands.
+
+```text
+Choose input -> Preview -> Submit -> Start runner -> Read result
+                                                    |
+                         Apply selected paths <- Review diff
+```
+
+Submitting saves a task to the queue. Starting the runner executes pending work.
+Applying selected paths changes the original project after review. These are
+separate actions. A failed or interrupted provider task is not retried
+automatically; an intentional rerun uses a new ID.
+
+![Reviewing an original file beside its proposed working-copy change](docs/images/copies-recovery.png)
+
+## Find the right panel
+
+| Panel | What you can do |
 | --- | --- |
-| Terminal board | Type into real CLI terminals; connect subsequent completed replies with directed routes |
-| Jobs & usage | Inspect saved tasks/results and scoped consumption; unknown is not zero |
-| Submit work | Review full/omit/summary input, queue a selected-copy task, then explicitly start its runner |
-| Copies & recovery | Compare proposals, promote selected paths and recover compatible backups |
-| Roles & archives | Run developer/test/reviewer workflows; inspect results and preserve archive evidence |
-| Data & settings | Manage workspace configuration; preview selected copy/body/connection cleanup and inspect residual data |
-| Sessions & updates | Restore paused boards, explicitly resume recorded sessions and check bundled runtime integrity |
+| Jobs & usage | Read retained answers, task status, sessions and reported consumption |
+| Submit work | Choose full files, omit files or use reviewed summaries before submitting |
+| Copies & recovery | Compare changes, promote selected paths and preview backup recovery |
+| Roles & archives | Run developer/test/reviewer steps and preserve evidence |
+| Sessions & updates | Inspect history, explicitly resume eligible conversations and check runtime integrity |
+| Data & settings | Manage project connections and preview selected data cleanup |
 
-Direct terminals use the original project. Batch/role workflows use selected
-copies; applying a proposal requires explicit reviewed paths. Task submission,
-runner start and promotion remain separate. Failed/uncertain work is not retried
-automatically. Entire conversations and terminal logs are not synchronized.
+Usage marked **unknown** is not zero. Delivery limits count automatic input
+attempts; they are not token budgets, spending caps or subscription balances.
+Restoring a board keeps routes paused and does not restart AI work or resend
+uncertain messages.
 
-## Start on Windows
+## Platforms and current limits
 
-Use local Windows x64 VS Code and a Python **3.11+** interpreter. Install and sign
-in to the official provider CLIs before using them. Node.js **24+** and Git are
-needed to build from source, not to install a completed VSIX.
+Source 0.5.0 has separate native packages for **Windows x64**, **glibc Linux
+x64/ARM64**, and **macOS Intel/Apple Silicon**. Use a VSIX matching your local
+VS Code's OS and CPU. See [platform requirements](docs/PLATFORMS.md) and
+[measured validation](docs/VALIDATION.md).
 
-1. Install [VS Code](https://code.visualstudio.com/download) and
-   [Python](https://www.python.org/downloads/). Follow the official
-   [Codex CLI guide](https://learn.chatgpt.com/docs/codex/cli) and
-   [Claude Code quickstart](https://code.claude.com/docs/en/quickstart).
-2. Build the current extension from this checkout:
+- Default provider shells: Windows PowerShell, Linux Bash, macOS Zsh.
+- Remote extension hosts, Remote-WSL, Alpine/musl and Windows ARM64 are outside
+  the current supported scope.
+- Ordinary-task/role-flow body removal, connection-file removal and the guided
+  cleanup stages containing them remain **Windows-only**. Other supported
+  workflows are described in the [data guide](docs/PROJECT_DATA.md).
+- Dedicated **local LLM** provider support is planned, not implemented. An
+  ordinary terminal profile does not add automatic local LLM reply routing.
 
-```powershell
-git clone https://github.com/utialy/PatchPort.git
-cd PatchPort
-py -3 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install .
-cd extensions/vscode
-npm ci
-npm run package
-cd ../..
-code --install-extension .bridge/artifacts/patchport-0.5.0-win32-x64.vsix
-```
+## Learn more or contribute
 
-The Python package is the extension's internal backend and build/test input.
-The product artifact is the VSIX; a separate desktop app or OS installer is not
-part of this repository. The VSIX bundles the core and fixed helpers, not Python.
-You can install it through **Extensions > ... > Install from VSIX**.
-
-3. Set **PatchPort: Core Python** (`patchport.corePython`) to your Python
-   executable, such as `C:\Projects\PatchPort\.venv\Scripts\python.exe`.
-4. Open a trusted local project, reload after changing the interpreter, and run
-   **PatchPort: Open AI Terminal Board**.
-5. Add two AI terminals, complete their normal startup/approval prompts, and mark
-   a terminal **Ready to receive** only when its input is empty. Connect output to
-   input, set small group delivery/hop limits, and resume the group.
-
-For selected-copy work, connect the target project using that same Python:
-
-```powershell
-C:\Projects\PatchPort\.venv\Scripts\python.exe -m agent_bridge setup --project C:\Projects\demo
-```
-
-Review and explicitly apply setup. In **Project work > Submit work**, inspect the
-input plan, queue a new task ID, and explicitly start the runner when ready.
-Then review changes in **Copies & recovery** before promoting selected paths.
-
-## Build on Linux or macOS
-
-Use Python 3.11+ and Node.js 24+ on the target OS and CPU. Linux source builds
-need a C++ compiler and make; packaged VSIX installation does not require Node.
-
-```sh
-git clone https://github.com/utialy/PatchPort.git
-cd PatchPort
-python3 -m venv .venv
-.venv/bin/python -m pip install .
-cd extensions/vscode
-npm ci
-npm run package
-```
-
-Install the target-specific VSIX printed by the package command through
-**Install from VSIX**. Set patchport.corePython to the absolute .venv/bin/python
-path. Default provider shells are Linux Bash and macOS Zsh. Native builds are
-separate from [measured platform validation](docs/VALIDATION.md).
-
-Batch/role body removal, connection-file removal and their guided cleanup
-stages remain Windows-only. Existing platform guards preserve those boundaries.
-
-## Clean project data deliberately
-
-**Data & settings** distinguishes workspace configuration, copies, conversation
-bodies, task/flow bodies and connection files. Guided cleanup reviews each stage
-separately, removes settings last, and supports receipt lookup/resume even after
-the configuration file is gone. IDs, usage, limits, originals and backups remain.
-Selected-scope completion is not forensic disk erasure. Historical, shared,
-active or unconfirmed data remain protected. See [data management](docs/PROJECT_DATA.md).
-
-![Guided cleanup results in the English extension](docs/images/project-data.png)
-
-## Guides and development
-
-- [VS Code walkthrough](docs/VSCODE_GUIDE.md): installation, panels, profiles, roles and recovery.
-- [Project data management](docs/PROJECT_DATA.md): selection, protection, receipts and residual scope.
-- [Architecture](docs/ARCHITECTURE.md), [validation](docs/VALIDATION.md), and [roadmap](docs/ROADMAP.md).
-- [Contributing](CONTRIBUTING.md): independent backend/extension tests and release policy.
-
-Remote extension hosts, Remote-WSL, external-process handoff, additional providers,
-actual charge enforcement and subscription quota reporting are not validated
-features. Delivery/claim/input limits use different units; missing usage is unknown.
-Real provider calls require explicit authorization and a stated call limit.
-
-MIT license. The source repository and a local VSIX build do not imply a
-Marketplace publication. Operational services and user installations are never
-replaced automatically.
-
-<p align="center">
-  <img src="https://github.com/user-attachments/assets/888a1b3f-a3a0-4770-9742-15e044627587" alt="Logo" width="200" height="auto">
-</p>
+- [User guide](docs/VSCODE_GUIDE.md): installation, first connection, copy work,
+  roles, recovery and troubleshooting.
+- [Project setup](docs/SETUP.md) / [data management](docs/PROJECT_DATA.md): detailed
+  connection, cleanup, preserved data and receipt handling.
+- [Contributing](CONTRIBUTING.md) / [architecture](docs/ARCHITECTURE.md): source
+  builds, tests and how the parts fit together.
+- [Roadmap](docs/ROADMAP.md) / [MIT license](LICENSE).

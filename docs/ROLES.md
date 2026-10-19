@@ -4,7 +4,7 @@
 
 The extension bundles fixed connection/role helpers. Its internal Python backend provides `agent-bridge connect` for explicit project setup and preserves existing CLI authentication.
 
-1. Install PatchPort as described in the [README](../README.md#install), and install and authenticate the provider CLIs you want to use.
+1. Install PatchPort and prepare its Python setup backend using the [copy-work tutorial](VSCODE_GUIDE.md#request-a-change-in-a-working-copy). Install and authenticate the provider CLIs you want to use.
 2. Run `agent-bridge setup --project /path/to/project` to select CLIs and input files, then confirm the preview. The [wizard](SETUP.md) creates the configuration and connection files without starting a runner. It preserves an existing bridge.json. Authentication is not tested.
 3. If you already prepared a reviewed configuration, you can instead preview `agent-bridge connect --project /path/to/project` and repeat with --apply. A current wheel installation does not require the source checkout at runtime. The existing init/doctor commands remain available for manual configuration.
 4. In the connected project, start `python bridge.py run` in a separate terminal and leave it running. Use only one runner for this project's state. `python bridge.py status` should report a fresh runner and dispatch ready.
