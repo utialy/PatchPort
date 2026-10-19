@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const fs = require('node:fs');
 const installed = path.resolve(process.argv[2]);
+assert.ok(process.versions.electron, 'Run the native package probe inside VS Code Electron.');
 const manifest = require(path.join(installed, 'native-manifest.json'));
 assert.equal(manifest.target, `${process.platform}-${process.arch}`);
 const pty = require(path.join(installed, 'node_modules/node-pty'));

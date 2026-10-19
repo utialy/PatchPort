@@ -20,7 +20,8 @@ function run(command, args, env, label) {
 (async () => {
   const extract = path.join(evidence, 'verified-' + randomUUID());
   run(python, [path.join(__dirname, 'verify-vsix.py'), artifact, '--target', target, '--extract', extract], process.env, 'package-verification');
-  const executable = process.env.PATCHPORT_VSCODE_EXECUTABLE || await downloadAndUnzipVSCode({ version: '1.142.0', cachePath: path.join(evidence, 'vscode') });
+  let executable = process.env.PATCHPORT_VSCODE_EXECUTABLE || await downloadAndUnzipVSCode({ version: '1.142.0', cachePath: path.join(evidence, 'vscode') });
+  if (process.platform === 'darwin') executable = require('./vscode-path.cjs').bundleExecutable(executable);
   const cleanEnv = { ...process.env }; delete cleanEnv.ELECTRON_RUN_AS_NODE; delete cleanEnv.VSCODE_IPC_HOOK_CLI; delete cleanEnv.VSCODE_PORTABLE;
   if (process.platform === 'linux' && require('node:os').release().toLowerCase().includes('microsoft')) cleanEnv.DONT_PROMPT_WSL_INSTALL = '1';
   const profile = process.platform === 'win32' ? path.join(evidence, 'profile-' + randomUUID()) : fs.mkdtempSync(path.join(process.platform === 'darwin' ? '/private/tmp' : '/tmp', 'pp-host-'));
