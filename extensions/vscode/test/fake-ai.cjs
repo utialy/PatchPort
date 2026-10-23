@@ -10,7 +10,11 @@ function event(body) {
     const config = args[args.indexOf("-c") + 1];
     let notify;
     try { notify = JSON.parse(config.slice("notify=".length)); } catch (e) { process.stdout.write(`NOTIFY_PARSE_ERROR ${config}\r\n`); process.exitCode = 2; return; }
-    execFile(notify[0], [...notify.slice(1), JSON.stringify(body)], { env: process.env, timeout: 6000 }, error => { if (error) process.stdout.write(`NOTIFY_ERROR ${error.message}\r\n`); });
+    const started = Date.now();
+    // Allow cold shell startup in addition to the notifier's own bounded HTTP request.
+    execFile(notify[0], [...notify.slice(1), JSON.stringify(body)], { env: process.env, timeout: 15000, windowsHide: true }, error => {
+      if (error) process.stdout.write(`NOTIFY_ERROR ${JSON.stringify({ code: error.code, killed: error.killed, signal: error.signal, duration_ms: Date.now() - started })}\r\n`);
+    });
     return;
   }
   const file = args[args.indexOf("--settings") + 1];
