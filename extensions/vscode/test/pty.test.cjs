@@ -28,7 +28,8 @@ test("real PTYs honor profile functions and deliver Claude to Codex via installe
     assert.equal(host.sessions.get("a").screen.cols, 73);
     router.ready("b", true); router.connect("a", "b"); router.connect("b", "a");
     host.input("a", "Hello from the PTY\r");
-    await waitFor(() => router.deliveries.length === 2 && router.deliveries.every(d => d.status === "completed"), 25000);
+    // Completion hooks and PTY output arrive on separate channels.
+    await waitFor(() => router.deliveries.length === 2 && router.deliveries.every(d => d.status === "completed") && output.b.includes("Peer message received") && output.a.includes("CLAUDE_REPLY_2"), 25000);
     assert.equal(board.groups[0].used, 2); assert.match(output.b, /Peer message received/); assert.match(output.a, /CLAUDE_REPLY_2/);
     const snapshot = await host.snapshot("a"); assert.ok(snapshot.sequence > 0); assert.equal(snapshot.cols, 73); assert.match(snapshot.data, /CLAUDE_REPLY_2/);
     const s = host.sessions.get("a");
