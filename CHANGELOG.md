@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.0
+
+- Add Ollama and LM Studio text conversations and completed-reply routes to Codex, Claude Code and other local cards.
+- Configure loopback server origins, exact model IDs, context/output limits and request deadlines; list models without inference or downloads.
+- Store optional LM Studio tokens in VS Code SecretStorage, bound to the saved profile and exact server origin.
+- Record one-use request authorization before generation, serialize requests per endpoint within one extension host, and retain explicit cancelled/uncertain states without automatic retry.
+- Start a new local conversation with empty context while retaining prior records, usage and group delivery counts; preserve newer boards against legacy fallback.
+- Support multiline paste, Unicode input, cancellation and fixed Windows Electron console startup using bundled helpers, with package integrity and installed-host checks on native targets.
+- Keep local conversations text-only: file/command tools, batch/role integration, persistent conversation resume and remote endpoints are outside this release.
+
 ## 0.5.0
 
 - Build native VSIX packages for Windows x64, glibc Linux x64/ARM64 and macOS Intel/Apple Silicon.

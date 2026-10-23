@@ -7,7 +7,7 @@ from .storage import checked_local_path, path_identity, Transaction
 
 MARKER='.bridge-connection.json'
 PREFIX='connection_guard_'
-INTERACTIVE=('interactive_meta','interactive_owners','interactive_session_control','interactive_delivery_control','interactive_redactions','interactive_sessions','interactive_events','interactive_usage','interactive_deliveries')
+INTERACTIVE=('interactive_meta','interactive_owners','interactive_session_control','interactive_delivery_control','interactive_redactions','interactive_sessions','interactive_events','interactive_usage','interactive_deliveries','interactive_local_requests','interactive_local_bodies','interactive_local_usage')
 BATCH=('tasks','context_plans','usage_snapshots','artifact_cleanup','control','runner_lifecycle','role_tasks','records_meta','records_tasks','records_writers','records_operations','records_flows')
 
 
@@ -65,8 +65,10 @@ def triggers(db):
             elif table in INTERACTIVE and table!='interactive_meta':
                 if table in ('interactive_owners','interactive_sessions','interactive_redactions','interactive_delivery_control'):
                     project=f'connection_path({row}.project)'
-                elif table in ('interactive_events','interactive_usage','interactive_session_control'):
+                elif table in ('interactive_events','interactive_usage','interactive_session_control','interactive_local_requests'):
                     project=f'(SELECT connection_path(s.project) FROM interactive_sessions s WHERE s.id={row}.session)'
+                elif table in ('interactive_local_bodies','interactive_local_usage'):
+                    project=f'(SELECT connection_path(s.project) FROM interactive_sessions s JOIN interactive_local_requests r ON r.session=s.id WHERE r.id={row}.request)'
                 else:
                     project=f'(SELECT connection_path(o.project) FROM interactive_owners o WHERE o.owner={row}.owner)'
                 condition=f'EXISTS(SELECT 1 FROM connection_freezes f WHERE f.active=1 AND f.project={project})'
@@ -90,6 +92,16 @@ def validate(db):
 def functions(db,admin=False):
     db.create_function('connection_admin',0,lambda:int(admin))
     db.create_function('connection_path',1,path_identity,deterministic=True)
+
+
+def refresh(db):
+    """Refresh existing fences inside an explicit schema-change transaction."""
+    if not present(db):
+        return
+    for row in list(db.execute("SELECT name FROM sqlite_master WHERE type='trigger' AND name GLOB 'connection_guard_*'")):
+        db.execute('DROP TRIGGER '+row[0])
+    for sql in triggers(db):
+        db.execute(sql)
 
 
 def connect(path):
@@ -116,9 +128,7 @@ def freeze(db,project,operation,primary=False):
     if row and row[0]!=operation: raise ValueError('Connection operation changed')
     db.execute('INSERT INTO connection_freezes VALUES (?,?,1,?) ON CONFLICT(project) DO UPDATE SET operation=excluded.operation,active=1,base_version=excluded.base_version',(path_identity(project),operation,version))
     if primary: db.execute('UPDATE records_meta SET version=3 WHERE id=1')
-    for row in list(db.execute("SELECT name FROM sqlite_master WHERE type='trigger' AND name GLOB 'connection_guard_*'")):
-        db.execute('DROP TRIGGER '+row[0])
-    for sql in triggers(db): db.execute(sql)
+    refresh(db)
 
 
 def thaw(db,project,operation,primary=False):

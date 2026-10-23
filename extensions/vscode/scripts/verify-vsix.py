@@ -9,10 +9,54 @@ import xml.etree.ElementTree as ET
 import zipfile
 
 TARGETS = {'win32-x64', 'linux-x64', 'linux-arm64', 'darwin-x64', 'darwin-arm64'}
+LOCAL_HELPERS = {'media/local-api.cjs', 'media/local-terminal.cjs'}
 
 def require(value, message):
     if not value:
         raise ValueError(message)
+
+def unique_object(pairs):
+    value = {}
+    for key, item in pairs:
+        require(key not in value, 'Duplicate local helper manifest key')
+        value[key] = item
+    return value
+
+def verify_local_helpers(archive, names, package):
+    manifest_path = 'extension/local-helper-manifest.json'
+    packaged = {name.removeprefix('extension/') for name in names
+                if name.lower().startswith('extension/media/local-') and name.lower().endswith('.cjs')}
+    require(not any(name.lower() == manifest_path and name != manifest_path for name in names),
+            'Unexpected local helper manifest path')
+    configuration = package.get('contributes', {}).get('configuration', [])
+    if isinstance(configuration, dict):
+        configuration = [configuration]
+    local_setting = isinstance(configuration, list) and any(
+        isinstance(section, dict) and isinstance(section.get('properties'), dict)
+        and 'patchport.localProfiles' in section['properties'] for section in configuration)
+    # Historical packages without local chat remain valid without the new manifest.
+    if not packaged and not local_setting and manifest_path not in names:
+        return 0
+    require(manifest_path in names, 'Missing local helper manifest')
+    manifest = json.loads(archive.read(manifest_path), object_pairs_hook=unique_object)
+    require(isinstance(manifest, dict) and set(manifest) == {'schema', 'files'}
+            and type(manifest['schema']) is int and manifest['schema'] == 1,
+            'Local helper manifest schema mismatch')
+    files = manifest['files']
+    require(isinstance(files, list) and len(files) == len(LOCAL_HELPERS), 'Incomplete local helper inventory')
+    seen = set()
+    for item in files:
+        require(isinstance(item, dict) and set(item) == {'path', 'sha256'}, 'Invalid local helper entry')
+        name, expected_hash = item['path'], item['sha256']
+        require(isinstance(name, str) and name in LOCAL_HELPERS and name not in seen, 'Duplicate or unexpected local helper path')
+        require(isinstance(expected_hash, str) and len(expected_hash) == 64
+                and all(char in '0123456789abcdef' for char in expected_hash), 'Invalid local helper hash')
+        seen.add(name)
+        require('extension/' + name in names, 'Missing local helper asset: ' + name)
+        require(hashlib.sha256(archive.read('extension/' + name)).hexdigest() == expected_hash,
+                'Local helper hash mismatch: ' + name)
+    require(seen == LOCAL_HELPERS and packaged == LOCAL_HELPERS, 'Local helper inventory mismatch')
+    return len(files)
 
 def binary_arch(data, target):
     os_name, arch = target.split('-')
@@ -42,6 +86,7 @@ def verify(file, target=None, extract=None):
         require(actual in TARGETS and (target is None or actual == target), 'VSIX target mismatch')
         package = json.loads(archive.read('extension/package.json'))
         require(identity.attrib['Version'] == package['version'], 'Version mismatch')
+        local_helper_files = verify_local_helpers(archive, names, package)
         require(package.get('icon') == 'media/symbol.png', 'Unexpected icon path')
         icon = archive.read('extension/' + package['icon'])
         require(hashlib.sha256(icon).hexdigest() == hashlib.sha256((Path(__file__).resolve().parents[1] / package['icon']).read_bytes()).hexdigest(), 'Icon source mismatch')
@@ -75,7 +120,7 @@ def verify(file, target=None, extract=None):
                     if item['path'].endswith('/spawn-helper'):
                         (extract / 'extension' / item['path']).chmod(0o755)
     return dict(passed=True, target=actual, version=package['version'], files=len(names), runtime_files=len(runtime['files']),
-                native_files=len(native['files']), sha256=hashlib.sha256(Path(file).read_bytes()).hexdigest(),
+                native_files=len(native['files']), local_helper_files=local_helper_files, sha256=hashlib.sha256(Path(file).read_bytes()).hexdigest(),
                 icon_sha256=hashlib.sha256(icon).hexdigest())
 
 def main():

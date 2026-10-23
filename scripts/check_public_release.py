@@ -69,7 +69,7 @@ def check_content(name, data):
     if name in MAINTAINER_ONLY:
         errors.append('internal maintainer workflow is outside the public distribution')
     if (any(p in EXCLUDED or p.endswith('.egg-info') for p in path.parts)
-            or name.startswith('extensions/vscode/core/') or name in ('extensions/vscode/runtime-manifest.json', 'extensions/vscode/native-manifest.json')
+            or name.startswith('extensions/vscode/core/') or name in ('extensions/vscode/runtime-manifest.json', 'extensions/vscode/native-manifest.json', 'extensions/vscode/local-helper-manifest.json')
             or path.name.startswith(('.env', 'HANDOFF')) or path.name == 'NEXT_SESSION.md'
             or path.suffix in {'.pyc', '.pyo', '.pyd', '.db', '.sqlite3', '.log'}):
         errors.append('private or generated file is not allowed')
@@ -120,7 +120,7 @@ def tree_files(root):
                 raise ValueError('Symlinks are not allowed in the public checkout')
         for name in names:
             path = Path(current) / name
-            if path.relative_to(root).as_posix() in ('extensions/vscode/runtime-manifest.json', 'extensions/vscode/native-manifest.json'):
+            if path.relative_to(root).as_posix() in ('extensions/vscode/runtime-manifest.json', 'extensions/vscode/native-manifest.json', 'extensions/vscode/local-helper-manifest.json'):
                 continue
             if path.relative_to(root).as_posix().startswith('extensions/vscode/core/'):
                 continue

@@ -161,9 +161,15 @@ def scope(args):
         for path in [config['state']/'queue.sqlite3',*[Path(p) for p in databases]]:
             if not path.exists(): continue
             with contextlib.closing(interactive.read_database(path)) as db:
-                if interactive_guard.version(db)==2:
+                version=interactive_guard.version(db)
+                if version in interactive_guard.SUPPORTED:
+                    interactive_guard.validate_schema(db)
                     for row in db.execute('SELECT s.id,s.project,c.redacted FROM interactive_sessions s LEFT JOIN interactive_session_control c ON c.session=s.id'):
                         if path_identity(row['project'])==path_identity(config['root']) and row['redacted']!=1 and row['id'] not in selected_history.get(path_identity(path),set()): fail('CLEANUP_SELECTION_INCOMPLETE')
+                    if version==3:
+                        for row in db.execute("SELECT r.session,s.project FROM interactive_local_requests r LEFT JOIN interactive_sessions s ON s.id=r.session LEFT JOIN interactive_local_bodies b ON b.request=r.id WHERE r.redacted!=1 OR b.request IS NULL OR b.binding!='' OR b.request_json!='' OR b.response!=''"):
+                            if row['project'] is None: fail('CLEANUP_SCOPE_UNKNOWN')
+                            if path_identity(row['project'])==path_identity(config['root']) and row['session'] not in selected_history.get(path_identity(path),set()): fail('CLEANUP_SELECTION_INCOMPLETE')
     data=dict(schema=SCHEMA,project=str(config['root']),config=str(config['config_path']),config_sha256=config['_source_sha256'],database=str(config['state']/'queue.sqlite3'),
               database_identity=records_body.identity(config['state']/'queue.sqlite3'),known_configs=args.get('known_configs',[]),databases=databases,
               steps=[dict(s,status='WAITING',operation=None,attempts=[]) for s in steps],phase='WAITING')
@@ -237,9 +243,16 @@ def residual(data):
             if not path.exists(): continue
             with contextlib.closing(interactive.read_database(path)) as db:
                 version=interactive_guard.version(db)
-                if version==2:
+                if version in interactive_guard.SUPPORTED:
+                    interactive_guard.validate_schema(db)
+                    remaining=set()
                     for row in db.execute('SELECT s.project,c.redacted FROM interactive_sessions s LEFT JOIN interactive_session_control c ON s.id=c.session'):
                         if path_identity(row['project'])==path_identity(data['project']) and row['redacted']!=1: count+=1
+                    if version==3:
+                        for row in db.execute("SELECT r.session,s.project,c.redacted AS session_redacted FROM interactive_local_requests r LEFT JOIN interactive_sessions s ON s.id=r.session LEFT JOIN interactive_session_control c ON c.session=s.id LEFT JOIN interactive_local_bodies b ON b.request=r.id WHERE r.redacted!=1 OR b.request IS NULL OR b.binding!='' OR b.request_json!='' OR b.response!=''"):
+                            if row['project'] is None: raise ValueError('Unknown local request scope')
+                            if path_identity(row['project'])==path_identity(data['project']) and row['session_redacted']==1: remaining.add(row['session'])
+                        count+=len(remaining)
                 elif version: raise ValueError('Legacy ledger')
         result['history_bodies']=count
         pending=[Path(data['project'])/'.bridge-integration-backups']; files=0; entries=0

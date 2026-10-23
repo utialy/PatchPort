@@ -1,4 +1,4 @@
-"""Schema-two writer leases and database-enforced interactive write boundaries."""
+"""Versioned writer leases and database-enforced interactive write boundaries."""
 import contextlib
 import hashlib
 import json
@@ -9,6 +9,7 @@ import time
 from .storage import FileLock, Transaction, checked_local_path, identifier, path_identity, probe_lock
 
 SCHEMA = 2
+SUPPORTED = (2, 3)
 
 
 class LedgerError(ValueError):
@@ -48,10 +49,11 @@ def connection(path, actor=None):
     functions(db)
     db.create_function('bridge_owner', 0, (lambda: '@admin') if actor == '@admin' else (lambda: actor.identity() if actor else ''))
     db.create_function('bridge_path_key', 1, path_identity, deterministic=True)
+    db.create_function('bridge_local_protocol', 0, lambda: 1)
     return Transaction(db)
 
 
-def trigger_sql():
+def trigger_sql(schema=SCHEMA):
     statements = []
     own_session = "EXISTS(SELECT 1 FROM interactive_owners o WHERE o.owner=bridge_owner() AND o.state='ACTIVE' AND o.owner=NEW.owner AND bridge_path_key(o.project)=bridge_path_key(NEW.project))"
     rules = {
@@ -62,23 +64,41 @@ def trigger_sql():
         'interactive_session_control': {op: "NEW.owner=bridge_owner() AND NEW.redacted=0 AND NEW.operation IS NULL AND EXISTS(SELECT 1 FROM interactive_owners o WHERE o.owner=bridge_owner() AND o.state='ACTIVE')" + (' AND NEW.session=OLD.session AND NEW.owner=OLD.owner AND OLD.redacted=0' if op == 'UPDATE' else '') for op in ('INSERT', 'UPDATE')},
         'interactive_delivery_control': {'INSERT': "NEW.redacted=0 AND NEW.operation IS NULL AND EXISTS(SELECT 1 FROM interactive_sessions a JOIN interactive_sessions b ON a.owner=b.owner JOIN interactive_owners o ON a.owner=o.owner WHERE a.id=NEW.source_session AND b.id=NEW.target_session AND o.owner=bridge_owner() AND o.state='ACTIVE' AND bridge_path_key(a.project)=bridge_path_key(NEW.project) AND bridge_path_key(b.project)=bridge_path_key(NEW.project))"},
     }
-    for table in ('interactive_meta', 'interactive_owners', 'interactive_session_control', 'interactive_delivery_control', 'interactive_redactions', 'interactive_sessions', 'interactive_events', 'interactive_usage', 'interactive_deliveries'):
+    tables = ['interactive_meta', 'interactive_owners', 'interactive_session_control', 'interactive_delivery_control', 'interactive_redactions', 'interactive_sessions', 'interactive_events', 'interactive_usage', 'interactive_deliveries']
+    if schema == 3:
+        local_session = "EXISTS(SELECT 1 FROM interactive_sessions s JOIN interactive_owners o ON s.owner=o.owner JOIN interactive_session_control c ON c.session=s.id WHERE s.id=NEW.session AND s.provider='local' AND o.owner=bridge_owner() AND o.state='ACTIVE' AND c.redacted=0 AND c.stopped=0)"
+        local_body = "EXISTS(SELECT 1 FROM interactive_local_requests r JOIN interactive_sessions s ON s.id=r.session JOIN interactive_owners o ON o.owner=s.owner JOIN interactive_session_control c ON c.session=s.id WHERE r.id=NEW.request AND o.owner=bridge_owner() AND o.state='ACTIVE' AND c.redacted=0 AND c.stopped=0 AND r.redacted=0)"
+        rules['interactive_local_requests'] = {
+            'INSERT': local_session + " AND NEW.redacted=0 AND NEW.state='PREPARED' AND NEW.grant_sha256 IS NULL",
+            'UPDATE': local_session + " AND NEW.id=OLD.id AND NEW.session=OLD.session AND NEW.binding_sha256=OLD.binding_sha256 AND NEW.body_sha256=OLD.body_sha256 AND NEW.origin=OLD.origin AND NEW.delivery_id IS OLD.delivery_id AND NEW.root IS OLD.root AND NEW.hops=OLD.hops AND OLD.redacted=0 AND NEW.redacted=0 AND (OLD.state IN ('PREPARED','DISPATCH_AUTHORIZED','STREAMING') OR NEW.state=OLD.state)"
+        }
+        rules['interactive_local_bodies'] = {op: local_body + (' AND NEW.request=OLD.request AND NEW.binding=OLD.binding AND NEW.request_json=OLD.request_json' if op == 'UPDATE' else '') for op in ('INSERT', 'UPDATE')}
+        rules['interactive_local_usage'] = {'INSERT': local_body}
+        tables.extend(['interactive_local_requests', 'interactive_local_bodies', 'interactive_local_usage'])
+    for table in tables:
         for operation in ('INSERT', 'UPDATE', 'DELETE'):
             allowed = rules.get(table, {}).get(operation, '0')
             name = 'bridge_guard_' + table + '_' + operation.lower()
-            statements.append(f"CREATE TRIGGER {name} BEFORE {operation} ON {table} BEGIN SELECT CASE WHEN bridge_owner()='@admin' OR ({allowed}) THEN 1 ELSE RAISE(ABORT,'INTERACTIVE_WRITER_REQUIRED') END; END")
+            condition = f"bridge_owner()='@admin' OR ({allowed})"
+            if schema == 3:
+                condition = f"bridge_local_protocol()=1 AND ({condition})"
+            statements.append(f"CREATE TRIGGER {name} BEFORE {operation} ON {table} BEGIN SELECT CASE WHEN {condition} THEN 1 ELSE RAISE(ABORT,'INTERACTIVE_WRITER_REQUIRED') END; END")
     return statements
 
 
 def validate_schema(db):
-    if version(db) != SCHEMA:
+    schema = version(db)
+    if schema not in SUPPORTED:
         raise LedgerError('UPGRADE_REQUIRED')
+    if schema == 3:
+        from .local_requests import validate_tables
+        validate_tables(db)
     from . import connection_guard
     connection_guard.validate(db)
     actual = {row[0]: row[1] for row in db.execute("SELECT name,sql FROM sqlite_master WHERE type='trigger' AND tbl_name GLOB 'interactive_*'") if not row[0].startswith(connection_guard.PREFIX)}
-    if len(actual) != len(trigger_sql()):
+    if len(actual) != len(trigger_sql(schema)):
         raise LedgerError('LEDGER_GUARD_DAMAGED')
-    for sql in trigger_sql():
+    for sql in trigger_sql(schema):
         name = sql.split()[2]
         if actual.get(name) != sql:
             raise LedgerError('LEDGER_GUARD_DAMAGED')
@@ -158,6 +178,7 @@ class WriterLease:
                         interactive.create_tables(db)
                         upgrade(db)
                     validate_schema(db)
+                    version_value = version(db)
                     db.execute("INSERT INTO interactive_owners VALUES (?,?,'ACTIVE',?,NULL)", (self.owner, str(self.project), time.time()))
                 info = self.path.stat()
                 lock_info = owner_path(self.path, self.owner).stat()
@@ -165,10 +186,11 @@ class WriterLease:
                 self.lock_identity = (lock_info.st_dev, lock_info.st_ino)
                 self.lock = lock
                 self.closed = False
+                self.schema = version_value
             except BaseException:
                 lock.__exit__(None, None, None)
                 raise
-        return dict(owner=self.owner, writer_protocol=2, schema=2)
+        return dict(owner=self.owner, writer_protocol=2, schema=version_value)
 
     def close(self, *, abandon=False):
         if self.closed:
@@ -178,6 +200,9 @@ class WriterLease:
             with FileLock(lock_path(self.path, self.project)), connection(self.path, '@admin') as db:
                 db.execute('BEGIN IMMEDIATE')
                 validate_schema(db)
+                if version(db) == 3:
+                    from .local_requests import abandon_owner
+                    abandon_owner(db, self.owner)
                 unfinished = db.execute('SELECT 1 FROM interactive_sessions s LEFT JOIN interactive_session_control c ON s.id=c.session WHERE s.owner=? AND (s.finished IS NULL OR c.stopped IS NOT 1) LIMIT 1', (self.owner,)).fetchone()
                 state = 'LOST' if unfinished else 'CLOSED'
                 if unfinished:

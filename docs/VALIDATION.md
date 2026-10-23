@@ -1,6 +1,6 @@
 # Validation
 
-## Current extension 0.5.0
+## Current extension 0.6.0
 
 The product is the English native VS Code extension. Tests use new temporary
 projects and controlled mock providers; no real provider call is part of the
@@ -17,6 +17,23 @@ Coverage includes explicit project selection, copy and body cleanup, writer/SQL
 guards, response-loss receipt lookup, same-operation I/O resume, config-free
 connection results, usage/ID/original/backup retention and host restoration.
 Release-local measurements are recorded after execution below.
+
+The 0.6.0 checks add loopback HTTP parser/request-ledger coverage, local board
+and profile state, native helper integrity, real PTY cancellation and terminal
+lifecycle, and installed Electron mock scenarios for Ollama and LM Studio.
+Real model calls and physical IME composition are separate unmeasured checks.
+The native measurements below retain their historical source/version boundaries.
+
+## Windows source checks, 2026-10-24
+
+The English 0.6.0 candidate passed 573 Python tests (572 passed, one skipped),
+193 extension tests (192 passed, one POSIX-only skip), and TypeScript checking.
+Its native Windows VSIX passed inventory/hash verification, isolated installation,
+native Electron PTY checks and eight installed local-helper mock scenarios.
+The extension activated, opened its board and recognized a local profile without
+starting a model session. VS Code was 1.142.0, Electron 43.7.7 and its Node runtime
+24.21.0. Real model calls were zero. Inspect the exact commit's workflow checks
+for native Linux/macOS results; this local run does not measure those platforms.
 
 ## Native measurements, 2026-10-19
 

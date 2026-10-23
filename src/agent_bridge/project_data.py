@@ -95,10 +95,11 @@ def database_info(path, project, *, batch=False):
                                            usage=db.execute('SELECT COUNT(*) FROM usage_snapshots').fetchone()[0] if 'usage_snapshots' in tables else None)
             if 'interactive_sessions' in tables:
                 required = {'interactive_meta', 'interactive_events', 'interactive_usage', 'interactive_deliveries'}
-                if not required <= tables or tuple(db.execute('SELECT version FROM interactive_meta WHERE id=1').fetchone() or ()) not in ((1,), (2,)):
+                if not required <= tables or tuple(db.execute('SELECT version FROM interactive_meta WHERE id=1').fetchone() or ()) not in ((1,), (2,), (3,)):
                     return dict(result, status='unknown', reason='INTERACTIVE_SCHEMA_UNKNOWN')
                 from . import interactive_guard
-                if interactive_guard.version(db) == 2:
+                schema = interactive_guard.version(db)
+                if schema in interactive_guard.SUPPORTED:
                     interactive_guard.validate_schema(db)
                 collate = ' COLLATE NOCASE' if os.name == 'nt' else ''
                 where = 's.project=?' + collate
@@ -120,6 +121,15 @@ def database_info(path, project, *, batch=False):
                 result['interactive'] = dict(sessions=sessions[0], unfinished=sessions[1] or 0,
                                              events=events, usage=usage, deliveries=None if incomplete else deliveries,
                                              other_project_sessions=total - sessions[0])
+                if schema == 3:
+                    local = db.execute("SELECT COUNT(*),SUM(r.state NOT IN ('COMPLETED','FAILED','TRUNCATED','CANCELLED','UNCERTAIN')) FROM interactive_local_requests r JOIN interactive_sessions s ON s.id=r.session WHERE " + where, (str(project),)).fetchone()
+                    bodies = db.execute('SELECT COUNT(*),SUM(LENGTH(CAST(b.binding AS BLOB))+LENGTH(CAST(b.request_json AS BLOB))+LENGTH(CAST(b.response AS BLOB))) FROM interactive_local_bodies b JOIN interactive_local_requests r ON r.id=b.request JOIN interactive_sessions s ON s.id=r.session WHERE ' + where, (str(project),)).fetchone()
+                    local_usage = db.execute('SELECT COUNT(*) FROM interactive_local_usage u JOIN interactive_local_requests r ON r.id=u.request JOIN interactive_sessions s ON s.id=r.session WHERE ' + where, (str(project),)).fetchone()[0]
+                    result['interactive'].update(local_requests=local[0], local_pending=local[1] or 0,
+                                                 local_bodies=bodies[0], local_body_bytes=bodies[1] or 0,
+                                                 local_usage=local_usage)
+                    if local[0] != bodies[0]:
+                        result.update(status='unknown', reason='LOCAL_BODY_SCOPE_UNKNOWN')
                 if incomplete:
                     result.update(status='unknown', reason='DELIVERY_SCOPE_UNKNOWN')
             elif not batch:
@@ -170,6 +180,8 @@ def inspect(project, config=None, databases=None, detached=False):
             report['blockers'].append('BATCH_PENDING_OR_RUNNING')
         if (item.get('interactive') or {}).get('unfinished'):
             report['blockers'].append('INTERACTIVE_UNFINISHED')
+        if (item.get('interactive') or {}).get('local_pending'):
+            report['blockers'].append('LOCAL_REQUEST_PENDING')
     paths = [('role_flows', project / '.role-flows'), ('connection_backups', project / '.bridge-integration-backups')]
     if state:
         paths.extend([('task_copies', state / 'workspaces'), ('role_jobs', state / 'p1-jobs')])

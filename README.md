@@ -6,7 +6,8 @@
 
 **Put your AI terminals on one board. Connect their replies. Review their changes.**
 
-PatchPort brings real **Codex CLI** and **Claude Code** terminals into VS Code.
+PatchPort brings real **Codex CLI** and **Claude Code** terminals into VS Code,
+alongside text conversations with **Ollama** and **LM Studio**.
 You can type into each terminal as usual, then draw an arrow to send one AI's
 completed reply to another. Your existing CLI login and permission settings stay
 in use.
@@ -20,7 +21,7 @@ in use.
 
 Screenshots show an earlier English Windows build with controlled demo data,
 not live provider responses or account usage. This README describes source
-**0.5.0**; the Marketplace listing's published version can differ.
+**0.6.0**; the Marketplace listing's published version can differ.
 
 ## What would I use it for?
 
@@ -31,6 +32,14 @@ You can follow the discussion and handle each CLI's approval prompts yourself.
 
 For file changes, you can choose a separate workflow: give an AI selected files
 in a working copy, inspect the diff, and apply only the paths you approve.
+
+For a local model, open **Launch profiles > New local profile**, select Ollama or
+LM Studio, enter the server origin and exact model ID, and confirm the model runs
+on your device. **Check connection** lists models without generation or downloads.
+Save the profile and add its terminal to the board. Local chat receives text you
+enter or route to it; it has no file or command tools. Follow the
+[local-model walkthrough](docs/VSCODE_GUIDE.md#talk-to-a-local-model) for limits,
+authentication and your first question.
 
 | Your goal | Start here | Where work happens |
 | --- | --- | --- |

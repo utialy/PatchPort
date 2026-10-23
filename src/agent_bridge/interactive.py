@@ -53,12 +53,14 @@ def initialize(path):
 def begin(path, session_id, node, project, provider, name, owner, *, writer=None):
     for value in (session_id, node, owner):
         identifier(value)
-    if provider not in ('claude', 'codex', 'terminal') or not isinstance(name, str) or len(name) > 80:
+    if provider not in ('claude', 'codex', 'terminal', 'local') or not isinstance(name, str) or len(name) > 80:
         raise ValueError('Invalid interactive session')
     project = str(checked_local_path(project))
     with connect(path, writer) as db:
         db.execute('BEGIN IMMEDIATE')
-        modern = guard.version(db) == SCHEMA
+        modern = guard.version(db) in guard.SUPPORTED
+        if provider == 'local' and guard.version(db) != 3:
+            raise guard.LedgerError('LOCAL_UPGRADE_REQUIRED')
         if modern:
             guard.validate_schema(db)
         elif guard.version(db) != LEGACY_SCHEMA:
@@ -82,7 +84,7 @@ def record(path, session_id, event_id, kind, turn=None, data=None, *, writer=Non
     encoded = json.dumps(data, allow_nan=False, separators=(',', ':'))
     with connect(path, writer) as db:
         db.execute('BEGIN IMMEDIATE')
-        modern = guard.version(db) == SCHEMA
+        modern = guard.version(db) in guard.SUPPORTED
         if not modern and guard.version(db) != LEGACY_SCHEMA:
             raise guard.LedgerError('UPGRADE_REQUIRED')
         current = guard.require_session(db, writer, session_id) if modern else None
@@ -95,6 +97,14 @@ def record(path, session_id, event_id, kind, turn=None, data=None, *, writer=Non
             if tuple(previous) != (session_id, kind, turn, encoded):
                 raise ValueError('Conflicting event identity')
             return dict(duplicate=True)
+        if current and current['provider'] == 'local':
+            if kind not in ('session_started', 'session_stopped'):
+                raise guard.LedgerError('LOCAL_REQUEST_REQUIRED')
+            if kind == 'session_started' and current['state'] != 'STARTING':
+                raise guard.LedgerError('LOCAL_LIFECYCLE_CONFLICT')
+            if kind == 'session_stopped':
+                from .local_requests import abandon_session
+                abandon_session(db, session_id)
         if modern and current['stopped']:
             raise guard.LedgerError('SESSION_ALREADY_STOPPED')
         db.execute('INSERT INTO interactive_events VALUES (?,?,?,?,?,?)',
@@ -140,7 +150,7 @@ def delivery(path, owner, data, *, writer=None):
     with connect(path, writer) as db:
         db.execute('BEGIN IMMEDIATE')
         old = db.execute('SELECT owner,status,data FROM interactive_deliveries WHERE id=?', (data['id'],)).fetchone()
-        if guard.version(db) == SCHEMA:
+        if guard.version(db) in guard.SUPPORTED:
             if writer is None or writer.identity() != owner:
                 raise guard.LedgerError('WRITER_LEASE_REQUIRED')
             for key in ('id', 'source', 'target', 'source_session', 'target_session'):
@@ -168,6 +178,10 @@ def delivery(path, owner, data, *, writer=None):
                 db.execute('INSERT INTO interactive_delivery_control(delivery,project,source_session,target_session) VALUES (?,?,?,?)', (data['id'], str(writer.project), data['source_session'], data['target_session']))
         elif guard.version(db) != LEGACY_SCHEMA:
             raise guard.LedgerError('UPGRADE_REQUIRED')
+        if guard.version(db) == 3 and old:
+            linked = db.execute('SELECT 1 FROM interactive_local_requests WHERE delivery_id=?', (data['id'],)).fetchone()
+            if linked and data['status'] != old['status']:
+                raise guard.LedgerError('LOCAL_REQUEST_REQUIRED')
         if old and (old['owner'] != owner or old['status'] in ('completed', 'uncertain', 'cancelled') and old['status'] != data['status']):
             raise ValueError('Conflicting delivery transition')
         db.execute('INSERT INTO interactive_deliveries VALUES (?,?,?,?,?) ON CONFLICT(id) DO UPDATE '
@@ -204,10 +218,25 @@ def read_event(path, project, event_id):
                          'WHERE e.id=? AND bridge_path_key(s.project)=?', (event_id, path_identity(Path(project).resolve()))).fetchone()
         if row is None:
             raise ValueError('Interactive event not found')
-        deleted = guard.version(db) == SCHEMA and db.execute('SELECT redacted FROM interactive_session_control WHERE session=?', (row['session'],)).fetchone()
-        return dict(row, data=json.loads(row['data']), body_deleted=bool(deleted and deleted[0]))
+        deleted = guard.version(db) in guard.SUPPORTED and db.execute('SELECT redacted FROM interactive_session_control WHERE session=?', (row['session'],)).fetchone()
+        return dict(row, data=event_data(db, project, row), body_deleted=bool(deleted and deleted[0]))
     finally:
         db.close()
+
+
+def event_data(db, project, row):
+    data = json.loads(row['data'])
+    if guard.version(db) == 3 and isinstance(data.get('local_request'), str):
+        guard.validate_schema(db)
+        from .local_requests import read_result
+        result = read_result(db, project, data['local_request'])
+        if result['session_id'] != row['session']:
+            raise guard.LedgerError('LOCAL_REQUEST_MISMATCH')
+        data = dict(data, request_state=result['state'], body_deleted=result['body_deleted'])
+        if not result['body_deleted']:
+            messages = json.loads(result['request_body'])['messages']
+            data['text'] = messages[-1]['content'] if row['kind'] == 'submitted' else result['content']
+    return data
 
 
 def resume_info(path, project, session_id):
@@ -217,7 +246,7 @@ def resume_info(path, project, session_id):
     try:
         row = db.execute('SELECT * FROM interactive_sessions WHERE id=? AND bridge_path_key(project)=?',
                          (session_id, path_identity(Path(project).resolve()))).fetchone()
-        if guard.version(db) == SCHEMA:
+        if guard.version(db) in guard.SUPPORTED:
             control = db.execute('SELECT redacted FROM interactive_session_control WHERE session=?', (session_id,)).fetchone()
             if control and control[0]:
                 raise guard.LedgerError('BODY_DELETED')
@@ -243,7 +272,7 @@ def report(path, project, days=None, limit=50, owner=None):
         db = read_database(path)
         try:
             db.execute('BEGIN')
-            controls = {row['session']: dict(row) for row in db.execute('SELECT * FROM interactive_session_control')} if guard.version(db) == SCHEMA else {}
+            controls = {row['session']: dict(row) for row in db.execute('SELECT * FROM interactive_session_control')} if guard.version(db) in guard.SUPPORTED else {}
             if db.execute("SELECT 1 FROM sqlite_master WHERE name='interactive_sessions'").fetchone():
                 sessions = db.execute('SELECT s.*,u.data AS usage FROM interactive_sessions s '
                                       'LEFT JOIN interactive_usage u ON u.session=s.id '
@@ -254,8 +283,8 @@ def report(path, project, days=None, limit=50, owner=None):
                     records.append(dict(id=row['id'], node=row['node'], provider=row['provider'], name=row['name'], body_deleted=bool(controls.get(row['id'], {}).get('redacted')),
                                         state='UNCONFIRMED' if owner and owner != row['owner'] and row['finished'] is None else row['state'], started=row['started'], finished=row['finished'],
                                         model=snap.get('model', 'UNKNOWN'), source=snap.get('source', 'UNKNOWN'),
-                                        coverage=snap.get('coverage', 'unknown'), **{key:(usage.number(row['finished']-row['started']) if row['finished'] is not None else None) if key == 'elapsed_seconds' else snap.get('metrics', {}).get(key) for key in usage.METRICS}))
-                events = [dict(row, data=json.loads(row['data'])) for row in db.execute(
+                                        coverage=snap.get('coverage', 'unknown'), known_subtotals=snap.get('known_subtotals'), unknown_requests=snap.get('unknown_requests'), reported_requests=snap.get('requests', 0), **{key:(usage.number(row['finished']-row['started']) if row['finished'] is not None else None) if key == 'elapsed_seconds' else snap.get('metrics', {}).get(key) for key in usage.METRICS}))
+                events = [dict(row, data=event_data(db, project, row)) for row in db.execute(
                     'SELECT e.* FROM interactive_events e JOIN interactive_sessions s ON s.id=e.session '
                     'WHERE bridge_path_key(s.project)=? ORDER BY e.at DESC LIMIT ?', (path_identity(Path(project).resolve()), limit))]
                 all_deliveries = [json.loads(row['data']) for row in db.execute('SELECT data FROM interactive_deliveries ORDER BY at DESC')]
@@ -268,6 +297,13 @@ def report(path, project, days=None, limit=50, owner=None):
         finally:
             db.close()
     billable = [row for row in records if row['provider'] != 'terminal']
+    summary = usage.totals(billable)
+    for metric in ('input_tokens', 'output_tokens'):
+        partial = [row for row in billable if row['provider'] == 'local' and row[metric] is None
+                   and row['reported_requests'] > (row.get('unknown_requests') or {}).get(metric, row['reported_requests'])]
+        if partial:
+            item = summary['metrics'][metric]
+            item['known_sum'] = (item['known_sum'] or 0) + sum(row['known_subtotals'][metric] for row in partial)
     for event in events:
         event['preview'] = True
         event['data'] = {key:(value[:600] if isinstance(value, str) else value) for key,value in event['data'].items()}
@@ -276,5 +312,5 @@ def report(path, project, days=None, limit=50, owner=None):
             item['text'] = item['text'][:600]
         item['preview'] = True
     return dict(scope='interactive_managed_sessions', period_basis='session_started', days=days,
-                summary=usage.totals(billable), sessions=records[:limit], more=len(records)>limit,
+                summary=summary, sessions=records[:limit], more=len(records)>limit,
                 events=events, deliveries=deliveries, group_attempts=group_attempts, cost_basis='provider-reported USD; not subscription bill')

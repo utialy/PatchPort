@@ -1,6 +1,6 @@
 # Native platform builds
 
-PatchPort 0.5.0 builds separate VSIX packages on the target operating system and
+PatchPort 0.6.0 builds separate VSIX packages on the target operating system and
 CPU. A Windows package cannot be installed as a Linux or macOS package.
 
 | OS | CPU | VSIX target | Native terminal payload |
@@ -44,10 +44,15 @@ the current native target. An explicit mismatched target is rejected. Build
 on each target host; renaming a Windows VSIX does not port its native modules.
 
 The verifier checks ZIP integrity, target/CPU, executable macOS helper, native
-and Python inventories/hashes, and the exact reviewed source icon. The host
+and Python inventories/hashes, the separate local-helper inventory, and the exact reviewed source icon. The host
 check installs the package into an isolated profile, runs its native PTY inside
 the actual VS Code Electron runtime, activates the installed extension and opens
-the board. Tests use controlled mock providers; no live AI invocation is required.
+the board. It also runs the installed local helper with the bundled Electron
+runtime through eight Ollama/LM Studio mock scenarios, verifies actual helper
+termination, and checks local profile discovery without starting a model session.
+Windows uses a fixed system console parent and explicit console TTY handles;
+users do not need an external Node installation for local chat.
+Tests use controlled mock providers; no live AI invocation is required.
 
 See [validation](VALIDATION.md) for measured results. A configured CI matrix alone
 is not evidence that its native jobs passed. Build outputs and test profiles are

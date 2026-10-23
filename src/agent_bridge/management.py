@@ -50,6 +50,8 @@ ACTIONS = {
 }
 ACTIONS.update(p1.ACTIONS)
 ACTIONS.update(history.ACTIONS)
+from . import local_requests
+ACTIONS.update(local_requests.ACTIONS)
 ACTIONS.update(records.ACTIONS)
 ACTIONS.update(records_body.ACTIONS)
 from . import connection_remove
@@ -245,6 +247,8 @@ class Session:
                             next_action='Inspect project state with the CLI; preview again before applying')
 
     def dispatch(self, action, args):
+        if action in local_requests.ACTIONS:
+            return local_requests.dispatch(self, action, args)
         if action in project_cleanup.ACTIONS:
             return project_cleanup.dispatch(self,action,args)
         if action in connection_remove.ACTIONS:
@@ -262,7 +266,8 @@ class Session:
             return dict(core_version=__version__, python=sys.version.split()[0], protocol=PROTOCOL,
                         actions=sorted(ACTIONS), interactive_schema=interactive.SCHEMA, workflow_schema=1,
                         project_data_schema=project_data.SCHEMA, copy_cleanup_schema=p1.copies.SCHEMA,
-                        interactive_writer_protocol=2, history_schema=1, records_schema=records.SCHEMA, records_body_schema=records_body.SCHEMA, records_flow_schema=1, connection_remove_schema=1, project_cleanup_schema=1)
+                        interactive_writer_protocol=2, interactive_schemas=[1, 2, 3], local_request_schema=1,
+                        history_schema=1, records_schema=records.SCHEMA, records_body_schema=records_body.SCHEMA, records_flow_schema=1, connection_remove_schema=1, project_cleanup_schema=1)
         if action == 'project.data.inspect':
             return project_data.inspect(**args)
         if action == 'project.inspect':
@@ -290,7 +295,7 @@ class Session:
                 if writer is not None:
                     if path_identity(writer.project) != path_identity(args['project']):
                         raise interactive_guard.LedgerError('SESSION_OWNER_MISMATCH')
-                    return dict(owner=writer.identity(), schema=2, writer_protocol=2)
+                    return dict(owner=writer.identity(), schema=writer.schema, writer_protocol=2)
                 writer = interactive_guard.WriterLease(path, args['project'], args['owner'])
                 result = writer.open()
                 self.writers[key] = writer

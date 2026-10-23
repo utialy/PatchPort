@@ -20,10 +20,34 @@ export function affectedPaths(action: string, args: Record<string, any>, report:
   return (args.paths || report.changes?.map((c: any) => c.path) || report.journal?.changes?.map((c: any) => c.path) || []);
 }
 export function resumeProfile(profile: Profile, providerSession: string): Profile {
+  if (profile.provider === "local") throw new Error("Local chat cannot resume an existing provider session. Start a new conversation.");
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(providerSession)) throw new Error("Check the recorded provider session ID.");
   if (profile.args.some(a => ["--resume", "-r", "--continue", "-c", "resume", "--last", "--all", "--session-id"].includes(a))) throw new Error("Remove existing resume or session arguments from the profile before selecting a recorded session.");
   if (!["claude", "codex"].includes(profile.provider)) throw new Error("Only supported AI sessions can be resumed.");
   return { ...profile, args: [...profile.args, ...(profile.provider === "claude" ? ["--resume", providerSession] : ["resume", providerSession])] };
+}
+export async function verifyLocalHelpers(extension: string): Promise<{ schema: 1; files: number; integrity: "VERIFIED" }> {
+  const root = path.resolve(extension), manifestPath = path.join(root, "local-helper-manifest.json");
+  const safeFile = async (file: string): Promise<void> => {
+    for (let current = file; ; current = path.dirname(current)) {
+      const info = await fs.lstat(current);
+      if (info.isSymbolicLink() || (info.isFile() && info.nlink !== 1)) throw new Error("Linked local helper files cannot be executed.");
+      if (current === file && !info.isFile()) throw new Error("The local helper is not a regular file.");
+      if (current === path.dirname(current)) break;
+    }
+  };
+  await safeFile(manifestPath);
+  const data = await fs.readFile(manifestPath);
+  if (data.length > 16384) throw new Error("Local helper manifest exceeds the size limit");
+  const manifest = JSON.parse(data.toString("utf8"));
+  const expected = new Set(["media/local-api.cjs", "media/local-terminal.cjs"]);
+  if (manifest.schema !== 1 || !Array.isArray(manifest.files) || manifest.files.length !== expected.size) throw new Error("Local helper manifest format mismatch. Reinstall a verified extension.");
+  for (const item of manifest.files) {
+    if (!item || !expected.delete(item.path) || typeof item.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(item.sha256)) throw new Error("Local helper manifest file inventory mismatch.");
+    const file = path.join(root, item.path); await safeFile(file);
+    if (createHash("sha256").update(await fs.readFile(file)).digest("hex") !== item.sha256) throw new Error(`Local helper file mismatch: ${item.path}`);
+  }
+  return { schema: 1, files: manifest.files.length, integrity: "VERIFIED" };
 }
 export async function runtimeReport(extension: string): Promise<any> {
   const manifest = JSON.parse(await fs.readFile(path.join(extension, "runtime-manifest.json"), "utf8"));

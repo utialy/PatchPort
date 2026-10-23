@@ -66,7 +66,7 @@ export class CoreClient {
     return new Promise((resolve, reject) => {
       if (this.idle) clearTimeout(this.idle);
       const child = this.open();
-      if (typeof args.plan_id === "string" && ["operation.apply", "operation.cancel", "setup.apply", "setup.cancel", "history.apply", "history.cancel", "records.apply", "records.cancel", "connection.apply", "connection.cancel", "cleanup.apply", "cleanup.cancel"].includes(action)) this.plans.delete(args.plan_id);
+      if (typeof args.plan_id === "string" && ["operation.apply", "operation.cancel", "setup.apply", "setup.cancel", "history.apply", "history.cancel", "records.apply", "records.cancel", "connection.apply", "connection.cancel", "cleanup.apply", "cleanup.cancel", "local.schema.apply", "local.schema.cancel"].includes(action)) this.plans.delete(args.plan_id);
       const timer = setTimeout(() => { this.fail(new Error("Core response unconfirmed. Inspect results, backups and archives; do not retry automatically.")); this.close(); }, 45000);
       this.pending = { id, resolve, reject, timer };
       child.stdin.write(encoded);
@@ -113,6 +113,39 @@ export class Ledger {
     this.bindings.set(key, binding); return binding;
   }
   binding(project: string): Binding | undefined { return this.bindings.get(projectKey(project)); }
+  async localSchema(project: string): Promise<any> {
+    const binding = this.binding(project) || await this.inspect(project);
+    const caps = await this.core.request("capabilities");
+    if (caps.local_request_schema !== 1) throw new Error("Local request ledger support is required.");
+    return this.core.request("local.schema.preview", { database: binding.database, project });
+  }
+  localIdentity(node: string): { id: string; database: string; project: string; owner: string; epoch: number } {
+    const session = this.sessions.get(node);
+    if (!session) throw new Error("The local managed session is missing.");
+    this.checkOwner(session.project, session.owner);
+    return { ...session, epoch: this.core.epoch };
+  }
+  localContext(node: string): Promise<any> {
+    const s = this.localIdentity(node);
+    return this.serial(async () => { this.checkLocalSession(node, s); return this.core.request("local.context", { database: s.database, project: s.project, session_id: s.id }); });
+  }
+  localPrepare(node: string, requestId: string, binding: Record<string, unknown>, requestBody: string): Promise<any> {
+    return this.localMutation(node, "local.prepare", requestId, { binding, request_body: requestBody });
+  }
+  localDispatch(node: string, requestId: string, hash: string): Promise<any> { return this.localMutation(node, "local.dispatch", requestId, { binding_sha256: hash }); }
+  localFinish(node: string, requestId: string, hash: string, outcome: Record<string, unknown>): Promise<any> { return this.localMutation(node, "local.finish", requestId, { binding_sha256: hash, outcome }); }
+  private localMutation(node: string, action: string, requestId: string, extra: Record<string, unknown>): Promise<any> {
+    const s = this.localIdentity(node);
+    return this.serial(async () => {
+      this.checkLocalSession(node, s);
+      const result = await this.core.request(action, { database: s.database, owner: s.owner, session_id: s.id, request_id: requestId, ...extra, apply: true });
+      this.changed(); return result;
+    });
+  }
+  private checkLocalSession(node: string, expected: ReturnType<Ledger["localIdentity"]>): void {
+    const current = this.localIdentity(node);
+    if (current.id !== expected.id || current.owner !== expected.owner || current.epoch !== expected.epoch) throw new Error("The local managed session changed before recording.");
+  }
   async start(node: NodeConfig): Promise<string> {
     const binding = this.binding(node.project) || await this.inspect(node.project);
     const id = randomUUID();

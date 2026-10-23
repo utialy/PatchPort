@@ -116,9 +116,9 @@ def blockers(root,state,ledgers,operation=None,*,held=False):
                     raw=launch.read_bytes(); ticket=json.loads(raw)
                     if ticket.get('outcome')!='FAILED' and lifecycle.get('confirmed_launch_sha256')!=hashlib.sha256(raw).hexdigest(): values.append('RUNNER_UNCONFIRMED')
             version=interactive_guard.version(db)
-            if not item['primary'] and version!=2: values.append('HISTORY_PREPARATION_REQUIRED')
-            if version not in (0,2): values.append('HISTORY_PREPARATION_REQUIRED')
-            if version==2:
+            if not item['primary'] and version not in interactive_guard.SUPPORTED: values.append('HISTORY_PREPARATION_REQUIRED')
+            if version not in (0,*interactive_guard.SUPPORTED): values.append('HISTORY_PREPARATION_REQUIRED')
+            if version in interactive_guard.SUPPORTED:
                 interactive_guard.validate_schema(db)
                 if any(path_identity(r[0])!=path_identity(root) for r in db.execute('SELECT project FROM interactive_sessions UNION SELECT project FROM interactive_owners')): values.append('CONNECTION_SHARED_LEDGER')
                 if db.execute("SELECT 1 FROM interactive_owners WHERE state!='CLOSED'").fetchone(): values.append('KNOWN_LEDGER_WRITER_ACTIVE')
@@ -128,6 +128,13 @@ def blockers(root,state,ledgers,operation=None,*,held=False):
                 if db.execute('SELECT 1 FROM interactive_deliveries d LEFT JOIN interactive_delivery_control c ON d.id=c.delivery WHERE c.delivery IS NULL').fetchone(): values.append('LEDGER_SCOPE_UNKNOWN')
                 for row in db.execute('SELECT project,redacted FROM interactive_delivery_control'):
                     if path_identity(row['project'])==path_identity(root) and row['redacted']!=1: values.append('BODY_CLEANUP_REQUIRED')
+                if version==3:
+                    rows=db.execute('SELECT s.project,r.redacted,b.request,b.binding,b.request_json,b.response FROM interactive_local_requests r LEFT JOIN interactive_sessions s ON s.id=r.session LEFT JOIN interactive_local_bodies b ON b.request=r.id')
+                    for row in rows:
+                        if row['project'] is None or row['request'] is None:
+                            values.append('LEDGER_SCOPE_UNKNOWN')
+                        elif path_identity(row['project'])==path_identity(root) and (row['redacted']!=1 or any(row[key] for key in ('binding','request_json','response'))):
+                            values.append('BODY_CLEANUP_REQUIRED')
             if operation is None: stamps.append([item['path'],hashlib.sha256(db.serialize()).hexdigest()])
         finally: db.close()
     return sorted(set(values)),stamps

@@ -1,8 +1,8 @@
 {
   "name": "patchport",
   "displayName": "PatchPort - AI Terminal Bridge",
-  "description": "Control real AI terminals and connect Claude Code and Codex inside your VS Code workspace.",
-  "version": "0.5.0",
+  "description": "Connect Codex, Claude Code and local Ollama or LM Studio conversations inside your VS Code workspace.",
+  "version": "0.6.0",
   "publisher": "utialy",
   "license": "MIT",
   "engines": {
@@ -154,6 +154,88 @@
               },
               "profilePath": {
                 "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "patchport.localProfiles": {
+          "type": "array",
+          "default": [],
+          "scope": "machine-overridable",
+          "description": "Local conversation profiles for Ollama and LM Studio. Use Launch profiles to discover models and store an optional LM Studio API token in SecretStorage. Filesystem tools and batch roles are not supported.",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "name",
+              "backend",
+              "endpointOrigin",
+              "modelId",
+              "contextWindow",
+              "maxOutputTokens",
+              "requestTimeoutSec",
+              "revision",
+              "executionLocationConfirmed"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "backend": {
+                "type": "string",
+                "enum": [
+                  "ollama",
+                  "lmstudio"
+                ]
+              },
+              "endpointOrigin": {
+                "type": "string",
+                "description": "HTTP loopback origin only, such as http://127.0.0.1:11434 or http://127.0.0.1:1234. API paths, credentials and remote hosts are not accepted."
+              },
+              "modelId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512,
+                "description": "Exact text generation model ID reported by the local server."
+              },
+              "contextWindow": {
+                "type": "integer",
+                "minimum": 2,
+                "maximum": 2097152,
+                "description": "Context requested from Ollama, or the actual loaded context configured in LM Studio. This is distinct from the model's advertised maximum."
+              },
+              "maxOutputTokens": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 32768,
+                "default": 1024,
+                "description": "Maximum output tokens; must be less than contextWindow."
+              },
+              "requestTimeoutSec": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 300,
+                "default": 300,
+                "description": "Total generation request deadline in seconds."
+              },
+              "revision": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "description": "Profile revision frozen for each session. Saving in Launch profiles generates a new revision."
+              },
+              "executionLocationConfirmed": {
+                "type": "boolean",
+                "default": false,
+                "description": "Confirm that the server is configured to run this model locally. A loopback address alone does not prove offline execution."
               }
             },
             "additionalProperties": false

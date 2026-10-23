@@ -2,7 +2,8 @@
 
 **Put your AI terminals on one board. Connect their replies. Review their changes.**
 
-PatchPort opens real **Codex CLI** and **Claude Code** terminals inside VS Code.
+PatchPort opens real **Codex CLI** and **Claude Code** terminals and local
+**Ollama** or **LM Studio** text conversations inside VS Code.
 Type and approve requests in each CLI as usual, then connect an output dot to
 another terminal's input dot to forward completed replies. Your existing CLI
 authentication and permissions stay in use.
@@ -10,7 +11,7 @@ authentication and permissions stay in use.
 ![Managed AI terminals and a directed route](https://raw.githubusercontent.com/utialy/PatchPort/main/docs/images/terminal-board.png)
 
 Screenshots show an earlier English Windows build with controlled demo data,
-not live provider responses or account usage. This document describes source 0.5.0.
+not live provider responses or account usage. This document describes source 0.6.0.
 
 ## Before you start
 
@@ -66,13 +67,30 @@ Follow the [copy-work tutorial](https://github.com/utialy/PatchPort/blob/main/do
 Failed/interrupted provider work is not retried automatically. Restoring a board
 does not restart AI work or resend uncertain deliveries.
 
+## Talk to a local model
+
+Set up Ollama or LM Studio and a text model first. In **Launch profiles**, choose
+**New local profile**, enter the loopback server origin and exact model ID, and
+confirm the model runs on your computer. **Check connection** lists models without
+generating, downloading or loading them. Set context/output limits and save.
+For authenticated LM Studio servers, save the profile and use **Set API token**;
+VS Code stores it in SecretStorage for that profile and origin.
+
+Add a terminal with this profile. **Enter** submits, **Ctrl+J** or **Alt+Enter** adds
+a line, and **Ctrl+C** cancels. Pasting multiple lines does not submit them.
+Connect its output dot to route only completed replies. Local chat has no file or
+command tools. **New local conversation** clears model context in a new session;
+**New round** resets group delivery counts while retaining context. See the
+[bundled local-model walkthrough](docs/USER_GUIDE.md#talk-to-a-local-model).
+
 ## Platforms and help
 
 Native packages target local **Windows x64**, **glibc Linux x64/ARM64**, and
 **macOS Intel/Apple Silicon**. Remote extension hosts, Remote-WSL, Alpine/musl
 and Windows ARM64 are outside the current supported scope. Ordinary-task/role-flow
 body removal, connection-file removal and their guided cleanup stages remain
-Windows-only. Dedicated local LLM provider support is planned, not implemented.
+Windows-only. Local chat supports loopback text inference; remote servers and
+local coding-agent tools are outside its current scope.
 
 Open **Guide** on the board for the [bundled walkthrough](docs/USER_GUIDE.md).
 The [online guide](https://github.com/utialy/PatchPort/blob/main/docs/VSCODE_GUIDE.md)

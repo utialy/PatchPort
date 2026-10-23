@@ -1,5 +1,7 @@
 name: portable-tests
 on: [push, pull_request]
+permissions:
+  contents: read
 jobs:
   test:
     strategy:
@@ -44,7 +46,7 @@ jobs:
             target: darwin-arm64
             python: ../../.venv/bin/python
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
+    timeout-minutes: 35
     defaults:
       run:
         working-directory: extensions/vscode
@@ -62,6 +64,10 @@ jobs:
           node-version: '24.14.0'
           cache: npm
           cache-dependency-path: extensions/vscode/package-lock.json
+      - name: Check native target and record environment
+        run: |
+          mkdir -p "$PATCHPORT_HOST_EVIDENCE"
+          node -e "const fs=require('node:fs'),os=require('node:os');const target=require('./scripts/native-package.cjs').nativeTarget('${{ matrix.target }}');fs.writeFileSync(process.env.PATCHPORT_HOST_EVIDENCE+'/environment.json',JSON.stringify({target,platform:process.platform,arch:process.arch,node:process.version,os:os.release(),commit:process.env.GITHUB_SHA},null,2)+'\n');"
       - run: python -m venv ../../.venv
       - run: ${{ matrix.python }} -m pip install ../..
       - if: runner.os == 'Linux'
@@ -69,14 +75,19 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zsh xvfb ${{ matrix.gtk }} libnss3 ${{ matrix.alsa }} libgbm1 xauth
       - run: npm ci
-      - run: npm run check
-      - run: npm test
-      - run: ${{ matrix.python }} -m unittest discover -s test -p test_vsix.py -v
-      - run: npm run package -- --target ${{ matrix.target }}
-      - if: runner.os == 'Linux'
-        run: xvfb-run -a npm run test:host
-      - if: runner.os != 'Linux'
-        run: npm run test:host
+      - run: npm run check 2>&1 | tee "$PATCHPORT_HOST_EVIDENCE/typecheck.log"
+      - name: Run extension tests including real local helper PTY
+        run: npm test 2>&1 | tee "$PATCHPORT_HOST_EVIDENCE/extension-tests.log"
+      - name: Check VSIX verifier regressions
+        run: ${{ matrix.python }} -m unittest discover -s test -p test_vsix.py -v 2>&1 | tee "$PATCHPORT_HOST_EVIDENCE/vsix-tests.log"
+      - name: Package for matching native host
+        run: npm run package -- --target ${{ matrix.target }} 2>&1 | tee "$PATCHPORT_HOST_EVIDENCE/package.log"
+      - name: Verify installed Electron host and local helper (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a npm run test:host 2>&1 | tee "$PATCHPORT_HOST_EVIDENCE/host-tests.log"
+      - name: Verify installed Electron host and local helper (Windows/macOS)
+        if: runner.os != 'Linux'
+        run: npm run test:host 2>&1 | tee "$PATCHPORT_HOST_EVIDENCE/host-tests.log"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -85,6 +96,7 @@ jobs:
           if-no-files-found: warn
           path: |
             .bridge/native-artifacts/*.vsix
-            .bridge/native-host/**/host-result.json
-            .bridge/native-host/**/electron-pty.log
-            .bridge/native-host/**/package-verification.log
+            .bridge/native-host/*/environment.json
+            .bridge/native-host/*/host-result.json
+            .bridge/native-host/*/packaged-local-result.json
+            .bridge/native-host/*/*.log

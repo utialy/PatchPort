@@ -2,4 +2,6 @@
 
 #wires{z-index:1}
 
+.provider-icon.local{background:#303957;color:#bcc8ff}.local-card{height:424px}.local-capability{height:26px;padding:3px 12px;font-size:9px;color:#aab9db;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.local-card .profile-name{max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.local-profile-actions{display:flex;flex-wrap:wrap;gap:7px}.local-confirmation{display:flex;align-items:flex-start;gap:8px;line-height:1.7;margin-top:18px}.local-confirmation input{flex:0 0 auto;margin-top:4px}.local-probe-status,.local-model-status{overflow-wrap:anywhere}.local-profile-form button:disabled{opacity:.5;cursor:not-allowed}.local-card .card-controls{gap:4px}.local-card .card-controls button{padding:3px 5px}
+
 .expand-button{padding:0 4px;font-size:15px;border:0;background:none;color:#9cafa5}.terminal-expanded{position:fixed;inset:16px;z-index:45;display:flex;flex-direction:column;background:#101419;border:1px solid #557564;border-radius:10px;box-shadow:0 0 0 40px #090f13dd;overflow:hidden}.expanded-header{height:48px;display:flex;align-items:center;justify-content:space-between;padding:0 18px;background:#1b2922;flex-shrink:0}.expanded-body{flex:1;min-height:0}.expanded-body .terminal-area{height:100%;padding:16px}

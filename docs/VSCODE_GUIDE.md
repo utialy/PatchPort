@@ -4,7 +4,7 @@ PatchPort lets you work with real Codex CLI and Claude Code terminals inside
 VS Code. Start with a simple conversation route. Use the separate copy workflow
 when you want to review file changes before applying them.
 
-This guide describes the English **0.5.0 source**. Screenshots show an earlier
+This guide describes the English **0.6.0 source**. Screenshots show an earlier
 English Windows build with controlled demo data, not live provider replies or
 billing. The Marketplace version can differ from the source version.
 
@@ -12,6 +12,7 @@ billing. The Marketplace version can differ from the source version.
 - [Make your first connection](#make-your-first-connection)
 - [Understand routing and stopping](#understand-routing-and-stopping)
 - [Customize launch profiles](#customize-launch-profiles)
+- [Talk to a local model](#talk-to-a-local-model)
 - [Request a change in a working copy](#request-a-change-in-a-working-copy)
 - [Review, apply and recover files](#review-apply-and-recover-files)
 - [Run development, tests and review](#run-development-tests-and-review)
@@ -48,15 +49,15 @@ requires the repository's Python package; that step is covered below.
 1. Open the [PatchPort Marketplace listing](https://marketplace.visualstudio.com/items?itemName=utialy.patchport)
    and install it in VS Code. If you have a native VSIX instead, open
    **Extensions > ... > Install from VSIX** and choose that file.
-2. For source 0.5.0 packages, match the file to your local VS Code's OS and CPU:
+2. For source 0.6.0 packages, match the file to your local VS Code's OS and CPU:
 
    | Your machine | VSIX filename |
    | --- | --- |
-   | Windows x64 | `patchport-0.5.0-win32-x64.vsix` |
-   | glibc Linux x64 | `patchport-0.5.0-linux-x64.vsix` |
-   | glibc Linux ARM64 | `patchport-0.5.0-linux-arm64.vsix` |
-   | macOS Intel | `patchport-0.5.0-darwin-x64.vsix` |
-   | macOS Apple Silicon | `patchport-0.5.0-darwin-arm64.vsix` |
+   | Windows x64 | `patchport-0.6.0-win32-x64.vsix` |
+   | glibc Linux x64 | `patchport-0.6.0-linux-x64.vsix` |
+   | glibc Linux ARM64 | `patchport-0.6.0-linux-arm64.vsix` |
+   | macOS Intel | `patchport-0.6.0-darwin-x64.vsix` |
+   | macOS Apple Silicon | `patchport-0.6.0-darwin-arm64.vsix` |
 
 3. Open your intended local project folder. Review VS Code's workspace trust
    prompt; restricted workspaces cannot run PatchPort terminals or mutations.
@@ -163,7 +164,7 @@ AI sessions or replay old/uncertain messages.
 
 ## Customize launch profiles
 
-Use **Launch profiles > + New profile** when your CLI command differs from the
+Use **Launch profiles > + New CLI profile** when your CLI command differs from the
 default, or you maintain a separate command for another account.
 
 ![Launch profile fields](images/launch-profiles.png)
@@ -187,8 +188,72 @@ are separate settings: adding a board profile does not add a batch endpoint.
 
 **Existing terminals** can focus a normal VS Code terminal or paste one line
 without Enter. They cannot provide output/state capture or automatic routes.
-An Ordinary terminal profile also does not add local LLM completion detection;
-dedicated local LLM provider integration is still planned.
+An Ordinary terminal profile does not add local LLM completion detection.
+Use the dedicated local profile below for Ollama or LM Studio.
+
+## Talk to a local model
+
+Use this flow to ask a local model questions or include its replies in a board
+conversation. Local chat receives only the text you type, paste or route to it.
+It does not read/edit project files, run commands or perform batch/role work.
+
+### 1. Prepare the runtime and profile
+
+1. Set up Ollama or LM Studio and a text model yourself, then start its HTTP
+   server. PatchPort does not download a model or install a runtime.
+2. Open **Launch profiles > New local profile**. Choose **Ollama** or **LM Studio**.
+3. Enter the **Server origin**, such as `http://127.0.0.1:11434` for a server
+   configured on that port. Use the actual port shown by your runtime. Omit `/v1`,
+   other API paths and tokens. Only loopback HTTP origins are accepted.
+4. Click **Check connection** to list models and select the **Exact model ID**.
+   This check does not generate, download or load a model. A listed model is not
+   proof that its response format is supported. Known remote/embedding models
+   are excluded; an unknown execution location requires your confirmation.
+5. Set the **Context window (tokens)**, **Maximum output tokens** and
+   **Total request timeout (seconds)**. Output must fit within the context window.
+   Ollama receives the window as `num_ctx`; for LM Studio, enter the context
+   window actually loaded on the server, which may differ from the model maximum.
+6. Confirm in the server settings that the selected model runs on your computer,
+   check the confirmation box and click **Save local profile**. A localhost
+   connection alone does not guarantee offline inference.
+
+If LM Studio requires authentication, save the profile and click **Set API token**.
+Enter it in VS Code's separate password prompt. SecretStorage binds it to this
+profile and exact server origin; it is not put in settings JSON or the webview.
+If the initial model listing needs that token, enter the exact model ID manually,
+save and set the token, then check the connection again. After changing the
+server origin, set its token again.
+
+### 2. Ask a question and connect its reply
+
+Add an AI terminal using the saved profile and your project. On first use,
+PatchPort may offer **Prepare** for the local conversation ledger. This retains
+existing records and blocks older extension writers; stop managed terminals
+before preparing it. Starting the terminal itself does not generate a reply.
+
+Try a small text-only question, such as `Explain this error in three steps`,
+followed by the error text. Press **Enter** to send. **Ctrl+J** or **Alt+Enter**
+adds a line. Pasting multiple lines does not submit them. The first question may
+load an already installed model into memory. **Ctrl+C** cancels the request;
+the server may continue computing if it does not confirm cancellation.
+
+Connect the local card's output to another local, Codex or Claude card as in the
+first tutorial. Only successfully completed replies are routed. Active requests,
+focused input and unsent drafts hold automatic delivery. After handling an error
+or cancellation, clear the draft and check **Ready to receive** and the group's
+**Resume routes**. Failed or uncertain requests are not automatically retried.
+
+| Action | What changes |
+| --- | --- |
+| New local conversation | Starts a new session with empty context; retains previous records, usage and group delivery counts |
+| Group > New round | Resets the group's automatic delivery count; retains local model context |
+| Edit a running profile | Applies to the next session; the active session keeps its launch settings |
+| Reopen VS Code | Restores cards/routes with groups paused; does not start models or resume local context automatically |
+
+Requests to the same server are serialized within one extension host. This is
+not a global limit across VS Code windows. Missing token usage remains unknown.
+Successful user/assistant pairs form context; cancelled, failed and uncertain
+turns are not silently replayed into the next question.
 
 ## Request a change in a working copy
 
@@ -415,8 +480,8 @@ available after configuration removal.
 
 For deeper reference: [runner management](RUNNER_MANAGEMENT.md),
 [usage coverage](USAGE.md), [data management](PROJECT_DATA.md) and
-[measured validation](VALIDATION.md). External-process handoff and dedicated local
-LLM integration remain future work.
+[measured validation](VALIDATION.md). External-process handoff and local
+coding-agent tools remain future work.
 
 ## Build from source
 
@@ -445,7 +510,7 @@ cd extensions/vscode
 npm ci
 npm run package
 cd ../..
-code --install-extension .bridge/artifacts/patchport-0.5.0-win32-x64.vsix
+code --install-extension .bridge/artifacts/patchport-0.6.0-win32-x64.vsix
 ```
 
 If `code` is not on PATH, use **Install from VSIX** in the editor.

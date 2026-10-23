@@ -6,8 +6,11 @@ import { WorkflowPanel } from "./workflowWebview";
 declare function acquireVsCodeApi(): { postMessage(message: unknown): void; getState(): unknown; setState(value: unknown): void };
 const api = acquireVsCodeApi();
 const post = (type: string, values: Record<string, unknown> = {}) => api.postMessage({ type, ...values });
-interface State { board: Board; runtime: Runtime[]; active: string[]; profiles: Profile[]; projects: string[]; trusted: boolean; supported: boolean; defaultShell?: Profile['shell']; remote: string; version: string; deliveries: Delivery[]; notices: Notice[]; routes: { id: string; state: string; label: string }[]; external: { id: string; name: string; capability: string }[]; core?: any }
+interface LocalModel { modelId: string; kind: string; executionLocation: string; supported: boolean; loaded?: boolean; contextWindow?: number; modelContextWindow?: number }
+interface LocalProbe { id?: string; backend: string; endpointOrigin: string; state: "loading" | "ready" | "error"; models?: LocalModel[]; error?: string }
+interface State { board: Board; runtime: Runtime[]; active: string[]; profiles: Profile[]; projects: string[]; trusted: boolean; supported: boolean; defaultShell?: Profile["shell"]; remote: string; version: string; deliveries: Delivery[]; notices: Notice[]; routes: { id: string; state: string; label: string }[]; external: { id: string; name: string; capability: string }[]; core?: any; localProbe?: LocalProbe }
 let state: State | undefined;
+let localEditor: { id: string; refresh(): void } | undefined;
 let zoom = 0.9;
 let connecting = "";
 let inspectorTab = "links";
@@ -28,7 +31,7 @@ function flushOutput(id: string): void {
 }
 const statusLabels: Record<string, string> = { queued: "Queued", sent: "Sent", completed: "Completed", uncertain: "Uncertain", cancelled: "Cancelled" };
 
-$("#app").innerHTML = "\n<header class=\"topbar\"><div class=\"brand\"><span class=\"brand-mark\">\u2197</span><div><strong>PatchPort</strong><span>AI TERMINAL BRIDGE</span></div><span class=\"version\">FIRST EDITION</span></div><div class=\"top-actions\"><button id=\"profiles\" class=\"quiet\">Launch profiles</button><button id=\"external\" class=\"quiet\">Existing terminals</button><button id=\"add\" class=\"primary\">+ AI terminal</button></div></header>\n<div class=\"workspacebar\"><div class=\"workspace-label\"><span class=\"live-dot\"></span><select id=\"project\" aria-label=\"Project\"></select><span id=\"workspace-kind\">LOCAL WORKSPACE</span></div><div class=\"workspace-actions\"><button id=\"new-group\">+ Group</button><button id=\"pause-all\">Pause routes</button><button id=\"stop-all\" class=\"danger-quiet\">Stop all terminals</button></div></div>\n<div id=\"banner\" hidden></div><main><section class=\"canvas-area\"><div class=\"canvas-heading\"><div><span class=\"eyebrow\">WORKSPACE CANVAS</span><h1>Your terminals. One team.</h1></div><div id=\"connect-hint\">Connect an output dot to another terminal's input dot.</div></div><div id=\"viewport\"><div id=\"world\"><svg id=\"wires\" aria-label=\"AI routes\"><defs><marker id=\"arrow\" markerWidth=\"9\" markerHeight=\"9\" refX=\"8\" refY=\"4.5\" orient=\"auto\"><path d=\"M0 0L9 4.5L0 9\" fill=\"#7dd3b0\"/></marker></defs><g id=\"wire-paths\"></g></svg><div id=\"nodes\"></div></div><div id=\"empty\"><div class=\"empty-orbit\">\u2197</div><span class=\"eyebrow\">YOUR AGENTS, CONNECTED</span><h2>Add your first AI terminal</h2><p>Use your existing CLIs and authentication.<br>Type in each terminal and route completed responses between them.</p><button id=\"first-add\" class=\"primary\">\uff0b Add AI terminal</button><div class=\"onboarding\"><span><b>01</b> Choose a profile</span><span><b>02</b> Type directly</span><span><b>03</b> Connect and collaborate</span></div></div></div><div class=\"canvas-tools\"><span id=\"counts\">Preparing</span><div><button id=\"zoom-out\" aria-label=\"Zoom out\">\u2212</button><button id=\"zoom-label\">90%</button><button id=\"zoom-in\" aria-label=\"Zoom in\">\uff0b</button><button id=\"arrange\">Arrange</button></div></div></section><aside class=\"inspector\"><div class=\"tabs\"><button data-tab=\"links\" class=\"active\">Routes</button><button data-tab=\"groups\">Groups</button><button data-tab=\"activity\">Delivery history</button></div><div id=\"inspector-body\"></div><div class=\"inspector-footer\">Routes forward subsequent completed responses.<br>Automatic delivery waits while you type.</div></aside></main><footer><span id=\"footer-state\">Local terminals - existing CLI authentication</span><span>Direct terminals work in the original project.</span></footer><div id=\"toast\" role=\"status\" hidden></div><div id=\"modal\" hidden><div class=\"modal-card\" role=\"dialog\" aria-modal=\"true\"><div class=\"modal-head\"><h2 id=\"modal-title\"></h2><button id=\"modal-close\" aria-label=\"Close\">\u00d7</button></div><div id=\"modal-body\"></div></div></div>";
+$("#app").innerHTML = "\n<header class=\"topbar\"><div class=\"brand\"><span class=\"brand-mark\">\u2197</span><div><strong>PatchPort</strong><span>AI TERMINAL BRIDGE</span></div><span class=\"version\">FIRST EDITION</span></div><div class=\"top-actions\"><button id=\"profiles\" class=\"quiet\">Launch profiles</button><button id=\"external\" class=\"quiet\">Existing terminals</button><button id=\"add\" class=\"primary\">+ AI terminal</button></div></header>\n<div class=\"workspacebar\"><div class=\"workspace-label\"><span class=\"live-dot\"></span><select id=\"project\" aria-label=\"Project\"></select><span id=\"workspace-kind\">LOCAL WORKSPACE</span></div><div class=\"workspace-actions\"><button id=\"new-group\">+ Group</button><button id=\"pause-all\">Pause routes</button><button id=\"stop-all\" class=\"danger-quiet\">Stop all terminals</button></div></div>\n<div id=\"banner\" hidden></div><main><section class=\"canvas-area\"><div class=\"canvas-heading\"><div><span class=\"eyebrow\">WORKSPACE CANVAS</span><h1>Your terminals. One team.</h1></div><div id=\"connect-hint\">Connect an output dot to another terminal's input dot.</div></div><div id=\"viewport\"><div id=\"world\"><svg id=\"wires\" aria-label=\"AI routes\"><defs><marker id=\"arrow\" markerWidth=\"9\" markerHeight=\"9\" refX=\"8\" refY=\"4.5\" orient=\"auto\"><path d=\"M0 0L9 4.5L0 9\" fill=\"#7dd3b0\"/></marker></defs><g id=\"wire-paths\"></g></svg><div id=\"nodes\"></div></div><div id=\"empty\"><div class=\"empty-orbit\">\u2197</div><span class=\"eyebrow\">YOUR AGENTS, CONNECTED</span><h2>Add your first AI terminal</h2><p>Use your existing CLIs and authentication.<br>Type in each terminal and route completed responses between them.</p><button id=\"first-add\" class=\"primary\">\uff0b Add AI terminal</button><div class=\"onboarding\"><span><b>01</b> Choose a profile</span><span><b>02</b> Type directly</span><span><b>03</b> Connect and collaborate</span></div></div></div><div class=\"canvas-tools\"><span id=\"counts\">Preparing</span><div><button id=\"zoom-out\" aria-label=\"Zoom out\">\u2212</button><button id=\"zoom-label\">90%</button><button id=\"zoom-in\" aria-label=\"Zoom in\">\uff0b</button><button id=\"arrange\">Arrange</button></div></div></section><aside class=\"inspector\"><div class=\"tabs\"><button data-tab=\"links\" class=\"active\">Routes</button><button data-tab=\"groups\">Groups</button><button data-tab=\"activity\">Delivery history</button></div><div id=\"inspector-body\"></div><div class=\"inspector-footer\">Routes forward subsequent completed responses.<br>Automatic delivery waits while you type.</div></aside></main><footer><span id=\"footer-state\">Local terminals - existing CLI authentication</span><span>CLI terminals work in the project; Local chat supports text conversation only.</span></footer><div id=\"toast\" role=\"status\" hidden></div><div id=\"modal\" hidden><div class=\"modal-card\" role=\"dialog\" aria-modal=\"true\"><div class=\"modal-head\"><h2 id=\"modal-title\"></h2><button id=\"modal-close\" aria-label=\"Close\">\u00d7</button></div><div id=\"modal-body\"></div></div></div>";
 
 function toast(text: string): void { const t = $("#toast"); t.textContent = text; t.hidden = false; setTimeout(() => t.hidden = true, 6500); }
 $(".top-actions").prepend(button("Jobs & usage", () => openCore(), "quiet"));
@@ -116,8 +119,8 @@ function expandTerminal(id: string): void {
   expandedId = id; expandedTitle.textContent = node?.name || "Terminal"; expandedBody.append(area); expanded.hidden = false;
   requestAnimationFrame(() => { card.fit.fit(); card.terminal.focus(); });
 }
-function modal(title: string): HTMLElement { if (title !== "Jobs & usage") { coreOpen = false; $("#modal .modal-card").classList.remove("core-modal"); } $("#modal-title").textContent = title; const body = $("#modal-body"); body.replaceChildren(); $("#modal").hidden = false; return body; }
-function closeModal(): void { workflowPanel.close(); $("#modal").hidden = true; coreOpen = false; $("#modal .modal-card").classList.remove("core-modal"); }
+function modal(title: string): HTMLElement { localEditor = undefined; if (title !== "Jobs & usage") { coreOpen = false; $("#modal .modal-card").classList.remove("core-modal"); } $("#modal-title").textContent = title; const body = $("#modal-body"); body.replaceChildren(); $("#modal").hidden = false; return body; }
+function closeModal(): void { localEditor = undefined; workflowPanel.close(); $("#modal").hidden = true; coreOpen = false; $("#modal .modal-card").classList.remove("core-modal"); }
 $("#modal-close").onclick = closeModal;
 $("#modal").addEventListener("click", event => { if (event.target === $("#modal")) closeModal(); });
 document.addEventListener("keydown", event => { if (event.key === "Escape") { closeModal(); connecting = ""; updateHint(); } });
@@ -129,16 +132,16 @@ function openAdd(selectedProfile?: string): void {
   if (!state) return;
   if (!state.projects.length) { post("openFolder"); return; }
   const body = modal("Add AI terminal");
-  body.append(el("p", "muted", "The CLI runs in the selected original project using its existing login and permissions."));
+  body.append(el("p", "muted", "CLI profiles run in the selected project with their existing login and permissions. Local chat uses only pasted text and received replies."));
   const form = el("form");
-  const profile = selectItems(state.profiles.map(p => ({ value: p.id, label: `${p.name} \u00b7 ${p.command}` })), selectedProfile);
+  const profile = selectItems(state.profiles.map(p => ({ value: p.id, label: `${p.name} \u00B7 ${p.local ? "Local chat / " + p.local.modelId : p.command}` })), selectedProfile);
   const project = selectItems(state.projects.map(p => ({ value: p, label: p })), selectedProject());
   const group = selectItems(state.board.groups.map(g => ({ value: g.id, label: g.name })));
   field(form, "Launch profiles", profile); field(form, "Project folder", project); field(form, "Collaboration group", group);
   const detail = el("div", "profile-detail");
-  const refresh = () => { const p = state!.profiles.find(p => p.id === profile.value)!; detail.textContent = `${p.command} ${p.args.join(" ")}\n${p.shell}${p.profilePath ? ` \u00b7 ${p.profilePath}` : " - default user profile"}`; };
+  const refresh = () => { const p = state!.profiles.find(p => p.id === profile.value); detail.textContent = p?.local ? `Local chat \u00B7 Conversation only\n${p.local.backend} \u00B7 ${p.local.modelId}\n${p.local.endpointOrigin}\nFile access, commands and batch/role work are unavailable. The first question may load an installed model into memory.` : p ? `${p.command} ${p.args.join(" ")}\n${p.shell}${p.profilePath ? ` \u00B7 ${p.profilePath}` : " - default user profile"}` : "Create a launch profile first."; };
   refresh(); profile.onchange = refresh; form.append(detail);
-  const actions = el("div", "form-actions"); actions.append(button("+ Add custom command", () => openProfiles()), button("Cancel", closeModal));
+  const actions = el("div", "form-actions"); actions.append(button("+ Add launch profile", () => openProfiles()), button("Cancel", closeModal));
   const submit = el("button", "primary", "Start terminal"); submit.type = "submit"; actions.append(submit); form.append(actions);
   form.onsubmit = event => { event.preventDefault(); post("add", { profileId: profile.value, project: project.value, groupId: group.value }); closeModal(); };
   body.append(form);
@@ -146,16 +149,17 @@ function openAdd(selectedProfile?: string): void {
 function openProfiles(selected?: string): void {
   if (!state) return;
   const body = modal("Launch profiles");
-  body.append(el("p", "muted", "Register functions or aliases such as claude-2. Enter the command and fixed arguments separately."));
-  const picker = selectItems([{ value: "", label: "+ New profile" }, ...state.profiles.map(p => ({ value: p.id, label: p.name }))], selected);
+  body.append(el("p", "muted", "CLI profiles use your functions, aliases and existing authentication. For a local model, choose its server and model in a new local profile."));
+  const picker = selectItems([{ value: "", label: "+ New CLI profile" }, { value: ":new-local:", label: "+ New local profile" }, ...state.profiles.map(p => ({ value: p.id, label: `${p.name}${p.local ? " \u00B7 Local chat" : ""}` }))], selected);
   field(body, "Profile", picker); picker.onchange = () => openProfiles(picker.value);
   const existing = state.profiles.find(p => p.id === picker.value);
+  if (picker.value === ":new-local:" || existing?.local) { renderLocalProfile(body, existing); return; }
   const form = el("form");
   const name = textInput(existing?.name || "", "Example: Claude 2"); name.required = true;
   const provider = selectItems([{ value: "claude", label: "Claude Code - automatic routing" }, { value: "codex", label: "Codex - automatic routing" }, { value: "terminal", label: "Ordinary terminal - manual input" }], existing?.provider);
   const command = textInput(existing?.command || "", "Example: claude-2"); command.required = true;
   const args = textInput(JSON.stringify(existing?.args || []), "[\"--model\", \"...\"]");
-  const shell = selectItems(['powershell', 'pwsh', 'bash', 'zsh', 'direct'].map(v => ({ value: v, label: v })), existing?.shell || state?.defaultShell || 'direct');
+  const shell = selectItems(["powershell", "pwsh", "bash", "zsh", "direct"].map(v => ({ value: v, label: v })), existing?.shell || state?.defaultShell || "direct");
   const shellPath = textInput(existing?.shellPath || "", "Empty uses the default shell");
   const profilePath = textInput(existing?.profilePath || "", "Empty uses the default user profile");
   field(form, "Display name", name); field(form, "Provider", provider); field(form, "Command name or executable", command, "Enter only the command name. Put additional options in Arguments below.");
@@ -163,6 +167,62 @@ function openProfiles(selected?: string): void {
   const actions = el("div", "form-actions"); actions.append(button("Cancel", closeModal)); const save = el("button", "primary", "Save profile"); save.type = "submit"; actions.append(save); form.append(actions);
   form.onsubmit = event => { event.preventDefault(); try { post("profile", { profile: { id: existing?.id || crypto.randomUUID(), name: name.value, provider: provider.value, command: command.value, args: JSON.parse(args.value), shell: shell.value, shellPath: shellPath.value, profilePath: profilePath.value } }); } catch { toast("Enter fixed arguments as a JSON array, for example [\"--model\", \"...\"]."); } };
   body.append(form);
+}
+function renderLocalProfile(body: HTMLElement, existing?: Profile): void {
+  const local = existing?.local, id = existing?.id || `local-${crypto.randomUUID()}`;
+  body.append(el("h3", "", "Local chat \u00B7 Conversation only"), el("p", "muted", "Set up Ollama or LM Studio and a model first. This profile supports text conversation and completed-reply routing. It has no file access, commands or batch/role work."));
+  const form = el("form", "local-profile-form"), name = textInput(existing?.name || "", "For example: Local review assistant"); name.required = true; name.maxLength = 128;
+  const backend = selectItems([{ value: "ollama", label: "Ollama" }, { value: "lmstudio", label: "LM Studio" }], local?.backend);
+  const origin = textInput(local?.endpointOrigin || "http://127.0.0.1:11434"); origin.required = true;
+  const model = textInput(local?.modelId || "", "Select a model or enter its exact ID"); model.required = true;
+  const models = selectItems([{ value: "", label: "Check the connection to list models" }]); models.disabled = true;
+  const context = textInput(local ? String(local.contextWindow) : "", "Context window actually in use"); context.type = "number"; context.min = "2"; context.max = "2097152"; context.step = "1"; context.required = true;
+  const output = textInput(String(local?.maxOutputTokens || 1024)); output.type = "number"; output.min = "1"; output.max = "32768"; output.step = "1"; output.required = true;
+  const timeout = textInput(String(local?.requestTimeoutSec || 300)); timeout.type = "number"; timeout.min = "1"; timeout.max = "300"; timeout.step = "1"; timeout.required = true;
+  const confirmed = textInput(); confirmed.type = "checkbox"; confirmed.checked = local?.executionLocationConfirmed === true; confirmed.required = true;
+  const probeStatus = el("p", "muted local-probe-status"), modelStatus = el("p", "muted local-model-status"); probeStatus.setAttribute("role", "status");
+  const sameSavedOrigin = () => Boolean(local && backend.value === local.backend && origin.value.trim().replace(/\/$/, "") === local.endpointOrigin);
+  const currentProbe = () => { const p = state?.localProbe; return p && p.backend === backend.value && p.endpointOrigin.replace(/\/$/, "") === origin.value.trim().replace(/\/$/, "") && (p.id || "") === (sameSavedOrigin() ? id : "") ? p : undefined; };
+  const probe = () => post("localProbe", { ...(sameSavedOrigin() ? { id } : {}), backend: backend.value, endpointOrigin: origin.value.trim() });
+  field(form, "Display name", name); field(form, "Local runtime", backend);
+  field(form, "Server origin", origin, "Use http://127.0.0.1, http://[::1] or localhost on this computer. Omit API paths such as /v1 and authentication tokens.");
+  const probeActions = el("div", "local-profile-actions"); probeActions.append(button("Check connection", probe), button("Refresh models", probe)); form.append(probeActions, probeStatus);
+  field(form, "Server models", models); field(form, "Exact model ID", model); form.append(modelStatus);
+  field(form, "Context window (tokens)", context, "Ollama receives this as num_ctx. For LM Studio, enter the context window actually loaded on the server. The model maximum can differ from the loaded value.");
+  field(form, "Maximum output tokens", output); field(form, "Total request timeout (seconds)", timeout);
+  const confirmation = el("label", "local-confirmation"); confirmation.append(confirmed, el("span", "", "I confirmed in the server settings that this model runs on my computer.")); form.append(confirmation);
+  form.append(el("p", "muted", "The API may not confirm execution location. A localhost connection does not prove offline inference. Connection checks only list models; they do not generate, download or load a model. The first question may load an installed model into memory."));
+  const tokens = el("div", "local-profile-actions");
+  const setToken = button("Set API token", () => post("localTokenSet", { id })), deleteToken = button("Delete API token", () => post("localTokenDelete", { id })); tokens.append(setToken, deleteToken); form.append(tokens, el("p", "muted", "Save the profile, then enter the token in VS Code's separate password prompt. SecretStorage binds it to this profile and exact server origin; the token is never shown here or in settings JSON. After changing the origin, set its token again."));
+  const save = el("button", "primary", "Save local profile"); save.type = "submit";
+  const refreshModel = () => {
+    const selected = currentProbe()?.models?.find(m => m.modelId === model.value);
+    const parts = selected ? [`Model listed: yes`, `Kind: ${selected.kind === "chat" ? "Text generation" : selected.kind === "embedding" ? "Embedding only - unavailable" : "Unknown"}`, `Execution location: ${selected.executionLocation === "remote" ? "Remote - unavailable" : "Unknown - user confirmation required"}`, `Load state: ${selected.loaded === true ? "Loaded" : selected.loaded === false ? "Not loaded" : "Unknown"}`, `Model context maximum: ${selected.modelContextWindow ?? "Unknown"}`, `Loaded context window: ${selected.contextWindow ?? "Unknown"}`] : ["Model listing, kind, load state and context window: unknown"];
+    modelStatus.textContent = `${parts.join(" \u00B7 ")}. Response compatibility: unverified (listing a model does not verify inference).`;
+    save.disabled = selected?.supported === false;
+  };
+  let renderedProbeSignature = "";
+  const refresh = () => {
+    const p = currentProbe(); setToken.disabled = deleteToken.disabled = backend.value !== "lmstudio" || !sameSavedOrigin();
+    const signature = JSON.stringify(p || null);
+    if (signature !== renderedProbeSignature) {
+      renderedProbeSignature = signature;
+      const allowed = p?.models?.filter(m => m.supported) || [];
+      models.replaceChildren(option("", p?.state === "ready" ? allowed.length ? "Select a model" : "No supported models available" : "Check the connection to list models"), ...allowed.map(m => option(m.modelId, `${m.modelId}${m.kind === "unknown" ? " - kind unknown" : ""}`)));
+      models.disabled = p?.state !== "ready" || !allowed.length;
+      if (allowed.some(m => m.modelId === model.value)) models.value = model.value;
+    }
+    probeStatus.textContent = !p ? "Connection not checked yet." : p.state === "loading" ? "Listing server models. No inference is performed." : p.state === "error" ? `Connection check failed: ${p.error || "Unknown cause."}` : `Connection checked - models: ${p.models?.length || 0} - response compatibility unverified`;
+    refreshModel();
+  };
+  backend.onchange = () => { origin.value = backend.value === "ollama" ? "http://127.0.0.1:11434" : "http://127.0.0.1:1234"; model.value = ""; context.value = ""; confirmed.checked = false; refresh(); };
+  origin.oninput = () => { confirmed.checked = false; refresh(); }; model.oninput = () => { confirmed.checked = false; refreshModel(); };
+  models.onchange = () => { if (models.value) { model.value = models.value; confirmed.checked = false; refreshModel(); } };
+  const actions = el("div", "form-actions local-profile-actions");
+  if (existing) actions.append(button("Add terminal with this profile", () => openAdd(id)), button("Delete profile", () => post("localProfileDelete", { id }), "danger-quiet"));
+  actions.append(button("Cancel", closeModal), save); form.append(actions);
+  form.onsubmit = event => { event.preventDefault(); if (!form.reportValidity() || save.disabled) return; if (Number(output.value) >= Number(context.value)) { toast("Maximum output tokens must be smaller than the context window."); return; } post("localProfileSave", { profile: { id, name: name.value, backend: backend.value, endpointOrigin: origin.value.trim(), modelId: model.value.trim(), contextWindow: Number(context.value), maxOutputTokens: Number(output.value), requestTimeoutSec: Number(timeout.value), executionLocationConfirmed: confirmed.checked } }); };
+  body.append(form); localEditor = { id, refresh }; refresh();
 }
 function openExternal(): void {
   if (!state) return;
@@ -182,14 +242,15 @@ function editGroup(group: Group): void {
 function updateHint(): void { $("#connect-hint").textContent = connecting ? "Click the target's left input dot. Press Esc to cancel." : "Connect an output dot to another terminal's input dot."; $("#connect-hint").classList.toggle("connecting", Boolean(connecting)); cards.forEach((c, id) => c.el.classList.toggle("connect-source", id === connecting)); }
 
 function createCard(node: NodeConfig): void {
-  const card = el("article", "terminal-card"); card.dataset.id = node.id;
+  const card = el("article", `terminal-card${node.provider === "local" ? " local-card" : ""}`); card.dataset.id = node.id;
   const header = el("div", "card-header");
-  const badge = el("span", `provider-icon ${node.provider}`, node.provider === "claude" ? "\u2733" : node.provider === "codex" ? "\u2318" : ">_");
+  const badge = el("span", `provider-icon ${node.provider}`, node.provider === "claude" ? "\u2733" : node.provider === "codex" ? "\u2318" : node.provider === "local" ? "L" : ">_");
   const title = el("input", "node-name"); title.value = node.name; title.setAttribute("aria-label", "Terminal name"); title.onchange = () => post("rename", { id: node.id, name: title.value });
-  const status = el("span", "phase"); const maximize = button("\u26f6", () => expandTerminal(node.id), "expand-button"); maximize.setAttribute("aria-label", "Expand terminal"); header.append(badge, title, status, maximize); card.append(header);
+  const status = el("span", "phase"); const maximize = button("\u26F6", () => expandTerminal(node.id), "expand-button"); maximize.setAttribute("aria-label", "Expand terminal"); header.append(badge, title, status, maximize); card.append(header);
   const sub = el("div", "card-subtitle"); const profileText = el("span", "profile-name"); const group = el("select", "node-group"); group.setAttribute("aria-label", "Collaboration group"); group.onchange = () => post("nodeGroup", { id: node.id, groupId: group.value }); sub.append(profileText, group); card.append(sub);
-  const inputPort = button("\u25cf", () => { if (connecting && connecting !== node.id) { post("connect", { source: connecting, target: node.id }); connecting = ""; updateHint(); } }, "port input-port"); inputPort.title = "Connect to this terminal"; inputPort.setAttribute("aria-label", "Input port"); inputPort.dataset.target = node.id;
-  const outputPort = button("\u25cf", () => { connecting = node.id; updateHint(); }, "port output-port"); outputPort.title = "Connect to another terminal"; outputPort.setAttribute("aria-label", "Output port");
+  if (node.provider === "local") card.append(el("div", "local-capability", "Local chat \u00B7 Conversation only"));
+  const inputPort = button("\u25CF", () => { if (connecting && connecting !== node.id) { post("connect", { source: connecting, target: node.id }); connecting = ""; updateHint(); } }, "port input-port"); inputPort.title = "Connect to this terminal"; inputPort.setAttribute("aria-label", "Input port"); inputPort.dataset.target = node.id;
+  const outputPort = button("\u25CF", () => { connecting = node.id; updateHint(); }, "port output-port"); outputPort.title = "Connect to another terminal"; outputPort.setAttribute("aria-label", "Output port");
   outputPort.onpointerdown = () => { connecting = node.id; updateHint(); };
   inputPort.onpointerup = () => { if (connecting && connecting !== node.id) { post("connect", { source: connecting, target: node.id }); connecting = ""; updateHint(); } };
   card.append(inputPort, outputPort);
@@ -212,12 +273,13 @@ function createCard(node: NodeConfig): void {
   terminal.onResize(({ cols, rows }) => post("resize", { id: node.id, cols, rows }));
   const observer = new ResizeObserver(() => { try { fit.fit(); } catch { /* The first frame may not have a measured size. */ } }); observer.observe(terminalArea);
   const controls = el("div", "card-controls");
-  const ready = button("Ready to receive", () => post("markReady", { id: node.id }), "ready-button"); ready.title = "Confirm that the CLI input is empty and ready for another request.";
+  const ready = button("Ready to receive", () => post("markReady", { id: node.id }), "ready-button"); ready.title = node.provider === "local" ? "The local helper must confirm an empty draft and no active request before it is ready." : "Confirm that the CLI input is empty and ready for another request.";
   const start = button("Start", () => post("start", { id: node.id }), "start-button");
   const interrupt = button("Interrupt", () => post("interrupt", { id: node.id }), "interrupt-button");
   const stop = button("Stop", () => post("stop", { id: node.id }), "stop-button");
   const remove = button("Remove card", () => post("remove", { id: node.id }), "remove-button");
   controls.append(start, ready, interrupt, stop, remove); card.append(controls);
+  if (node.provider === "local") { const conversation = button("New local conversation", () => post("localNewConversation", { id: node.id }), "local-conversation-button"); conversation.title = "Start a new managed session with empty context. Retain previous records, usage and the group's delivery count."; controls.prepend(conversation); }
   card.append(el("div", "card-reason"));
   $("#nodes").append(card); cards.set(node.id, { el: card, terminal, fit, observer });
   if (!streams.has(node.id)) streams.set(node.id, { last: 0, waiting: state?.active.includes(node.id) === true });
@@ -261,7 +323,7 @@ function renderInspector(): void {
     for (const g of state.board.groups) {
       const row = el("div", "group-row"); row.append(el("strong", "", g.name), el("p", "muted", g.goal || "A shared goal is included with routed messages."));
       const meter = el("div", "meter"); const fill = el("i"); fill.style.width = `${Math.min(100, g.used / g.maxDeliveries * 100)}%`; meter.append(fill); row.append(meter, el("small", "", `Automatic deliveries ${g.used}/${g.maxDeliveries} - max ${g.maxHops} hops`));
-      const actions = el("div", "route-actions"); actions.append(button(g.paused ? "Resume routes" : "Pause", () => post("group", { id: g.id, paused: !g.paused })), button("Settings", () => editGroup(g)), button("New round", () => post("newRound", { id: g.id }))); row.append(actions); body.append(row);
+      const actions = el("div", "route-actions"); const round = button("New round", () => post("newRound", { id: g.id })); round.title = "Start a new delivery round for this group. Local chat context is retained."; actions.append(button(g.paused ? "Resume routes" : "Pause", () => post("group", { id: g.id, paused: !g.paused })), button("Settings", () => editGroup(g)), round); row.append(actions); body.append(row);
     }
   } else {
     body.append(el("div", "section-label", "DELIVERY JOURNAL"));
@@ -288,15 +350,20 @@ function render(): void {
     c.el.style.left = `${n.x}px`; c.el.style.top = `${n.y}px`; c.el.hidden = n.project !== selectedProject();
     const title = c.el.querySelector<HTMLInputElement>(".node-name")!; if (document.activeElement !== title) title.value = n.name;
     c.el.querySelector(".phase")!.textContent = phaseLabels[phase]; c.el.querySelector(".phase")!.className = `phase ${phase}`;
-    const p = state.profiles.find(p => p.id === n.profileId); c.el.querySelector(".profile-name")!.textContent = p ? `${p.command} \u00b7 ${p.shell}` : "Missing profile";
+    const p = state.profiles.find(p => p.id === n.profileId), running = state.active.includes(n.id);
+    const activeLocal = running ? r?.local : p?.local, profileText = c.el.querySelector<HTMLElement>(".profile-name")!;
+    profileText.textContent = n.provider === "local" ? activeLocal ? `${activeLocal.backend} \u00B7 ${activeLocal.modelId}` : running ? "Checking active session settings" : "Local profile missing" : p ? `${p.command} \u00B7 ${p.shell}` : "Missing profile";
+    profileText.title = profileText.textContent || "";
+    const capability = c.el.querySelector<HTMLElement>(".local-capability");
+    if (capability) { capability.textContent = `Local chat \u00B7 Conversation only${activeLocal ? ` \u00B7 ${activeLocal.endpointOrigin}` : ""}`; capability.title = `${running ? "Active session settings" : "Next session settings"}${activeLocal ? ` \u00B7 revision ${activeLocal.revision}` : ""}. No file or command tools. Profile edits apply to new sessions.`; }
     const group = c.el.querySelector<HTMLSelectElement>(".node-group")!; if (document.activeElement !== group) { group.replaceChildren(...state.board.groups.map(g => option(g.id, g.name))); group.value = n.groupId; }
-    const running = state.active.includes(n.id);
     c.el.querySelector<HTMLElement>(".start-button")!.hidden = running;
     c.el.querySelector<HTMLElement>(".remove-button")!.hidden = running;
     c.el.querySelector<HTMLElement>(".stop-button")!.hidden = !running;
     c.el.querySelector<HTMLElement>(".interrupt-button")!.hidden = !running;
     c.el.querySelector<HTMLElement>(".ready-button")!.hidden = !running || n.provider === "terminal";
-    c.el.querySelector(".card-reason")!.textContent = r?.reason || (r?.dirty ? "Human input in progress; delivery waits" : r?.focused ? "Terminal focused; click elsewhere to allow delivery" : n.provider === "terminal" ? "Ordinary terminal; manual input only" : "Check that the input is empty, then click Ready to receive.");
+    const conversation = c.el.querySelector<HTMLButtonElement>(".local-conversation-button"); if (conversation) conversation.disabled = running && (phase === "busy" || phase === "starting" || r?.dirty === true);
+    c.el.querySelector(".card-reason")!.textContent = r?.reason || (r?.dirty ? "Human input in progress; delivery waits" : r?.focused ? "Terminal focused; click elsewhere to allow delivery" : n.provider === "terminal" ? "Ordinary terminal; manual input only" : n.provider === "local" ? "Confirm an empty draft before Ready to receive; only completed replies are routed" : "Check that the input is empty, then click Ready to receive.");
   }
   const visible = state.board.nodes.filter(n => n.project === selectedProject()); $("#empty").hidden = visible.length > 0;
   $("#counts").textContent = `${visible.length} terminals - ${state.board.edges.length} routes`;
@@ -317,7 +384,7 @@ $("#zoom-out").onclick = () => setZoom(zoom - 0.1); $("#zoom-in").onclick = () =
 $("#arrange").onclick = () => state?.board.nodes.filter(n => n.project === selectedProject()).forEach((n, i) => post("move", { id: n.id, x: 32 + i % 2 * 570, y: 32 + Math.floor(i / 2) * 430 }));
 window.addEventListener("message", event => {
   const m = event.data;
-  if (m.type === "state") { state = m.value; workflowPanel.update(state); render(); if (coreOpen) renderCore(); }
+  if (m.type === "state") { state = m.value; workflowPanel.update(state); render(); if (coreOpen) renderCore(); localEditor?.refresh(); }
   else if (m.type === "recordsPurged") { if (state && state.core?.project === m.project) state.core = undefined; workflowPanel.purged(m.project); if (coreOpen) renderCore(); }
   else if (m.type === "historyPurged") {
     for (const id of m.nodes) {
@@ -343,7 +410,9 @@ window.addEventListener("message", event => {
     }
   }
   else if (m.type === "error") toast(m.text);
-  else if (m.type === "savedProfile") { toast("Launch profile saved."); closeModal(); openAdd(m.id); }
+  else if (m.type === "savedProfile") { const local = localEditor?.id === m.id || state?.profiles.some(p => p.id === m.id && p.local); toast("Launch profile saved."); closeModal(); if (local) openProfiles(m.id); else openAdd(m.id); }
+  else if (m.type === "localProfileDeleted") { toast("Local profile deleted. Existing conversation records are retained."); if (localEditor?.id === m.id) openProfiles(":new-local:"); }
+  else if (m.type === "localTokenUpdated") toast(m.stored ? "API token stored for this profile and server origin." : "API token deleted for this profile and server origin.");
   else if (m.type === "page") { if (m.page === "profiles") openProfiles(); else if (m.page === "external") openExternal(); else openAdd(); }
 });
 setZoom(0.9); post("ready");

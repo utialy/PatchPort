@@ -25,10 +25,12 @@ const collect = directory => { for (const item of fs.readdirSync(directory, { wi
 collect(path.join(root, "core/agent_bridge"));
 runtimeFiles.sort((a, b) => a.path.localeCompare(b.path));
 fs.writeFileSync(path.join(root, "runtime-manifest.json"), JSON.stringify({ schema: 1, extension_version: require(path.join(root, "package.json")).version, files: runtimeFiles }, null, 2));
+const localHelpers = ["media/local-api.cjs", "media/local-terminal.cjs"];
+fs.writeFileSync(path.join(root, "local-helper-manifest.json"), JSON.stringify({ schema: 1, files: localHelpers.map(file => ({ path: file, sha256: require("node:crypto").createHash("sha256").update(fs.readFileSync(path.join(root, file))).digest("hex") })) }, null, 2));
 Promise.all([
   esbuild.build({ entryPoints: ["src/extension.ts"], bundle: true, outfile: "dist/extension.js", platform: "node", target: "node20", external: ["vscode", "node-pty"], sourcemap: false }),
   esbuild.build({ entryPoints: ["src/webview.ts"], bundle: true, outfile: "dist/webview.js", platform: "browser", target: "es2022", sourcemap: false }),
-  esbuild.build({ entryPoints: ["src/model.ts", "src/session.ts", "src/core.ts", "src/providerUsage.ts", "src/workflow.ts", "src/stateStore.ts", "src/projectData.ts", "src/platform.ts"], bundle: true, outdir: "dist/test", platform: "node", target: "node20", external: ["node-pty"] })
+  esbuild.build({ entryPoints: ["src/model.ts", "src/session.ts", "src/localHost.ts", "src/core.ts", "src/providerUsage.ts", "src/workflow.ts", "src/stateStore.ts", "src/projectData.ts", "src/platform.ts"], bundle: true, outdir: "dist/test", platform: "node", target: "node20", external: ["node-pty"] })
 ]).then(() => {
   fs.copyFileSync("node_modules/@xterm/xterm/css/xterm.css", "dist/xterm.css");
   const notices = ["@xterm/xterm", "@xterm/addon-fit", "@xterm/headless", "@xterm/addon-serialize", "node-pty"].map(name => {

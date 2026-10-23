@@ -1,14 +1,14 @@
 import * as vscode from "vscode";
 import * as path from "node:path";
-import { randomBytes, randomUUID } from "node:crypto";
-import { Board, NodeConfig, Profile, Router, bounded, defaultBoard, restoreBoard, validateProfile, explicitTerminalText, projectKey } from "./model";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { Board, NodeConfig, Profile, Router, bounded, defaultBoard, restoreBoard, validateProfile, validateLocalProfile, explicitTerminalText, projectKey } from "./model";
 import { SessionHost } from "./session";
 import { CoreClient, Ledger, endpointProfiles } from "./core";
-import { affectedPaths, cleanupRoots, dirtyConflicts, resumeProfile, runtimeReport, workflowActions } from "./workflow";
-import { Configs, Snapshot, StateStore } from "./stateStore";
+import { affectedPaths, cleanupRoots, dirtyConflicts, resumeProfile, runtimeReport, workflowActions, verifyLocalHelpers } from "./workflow";
+import { Configs, Snapshot, StateStore, selectBoardSnapshot } from "./stateStore";
 import { changedProject, DataAction, DataPlan, dataActions, planProject, validateDataPlan } from "./projectData";
 
-import { defaultProfiles, defaultPython, defaultShell, supportedLocal } from './platform';
+import { defaultProfiles, defaultPython, defaultShell, supportedLocal } from "./platform";
 
 let controller: Controller | undefined;
 
@@ -62,6 +62,8 @@ class Controller implements vscode.TreeDataProvider<vscode.TreeItem>, vscode.Dis
   private workflowRevision = 0;
   private workflowPlan?: { id: string; project: string; action: string; args: Record<string, any>; report: any; expires: number };
   private runtimeView: any = { state: "unchecked" };
+  private localProbe: any = { state: "idle" };
+  private localProbeRevision = 0;
   private saveTimer?: NodeJS.Timeout;
   private stateTimer?: NodeJS.Timeout;
   private outputBatches = new Map<string, { sequence: number; data: string }[]>();
@@ -87,10 +89,15 @@ class Controller implements vscode.TreeDataProvider<vscode.TreeItem>, vscode.Dis
       const value = legacy ? context.workspaceState.get<string>(legacy) : undefined;
       if (value && path.isAbsolute(value)) this.savedConfigs[key] = value;
     }
-    const board = restoreBoard(snapshot?.board || context.workspaceState.get("board.v1"), this.projects());
-    this.core = new CoreClient(vscode.workspace.getConfiguration('patchport').get<string>('corePython', '') || defaultPython(), path.join(context.extensionPath, 'core'));
+    let board = defaultBoard();
+    if (!this.persistenceError) {
+      try { board = restoreBoard(selectBoardSnapshot(snapshot, context.workspaceState.get("board.v2"), context.workspaceState.get("board.v1"), context.workspaceState.get("board.schema")), this.projects()); }
+      catch (error) { this.persistenceError = String(error); }
+    }
+    this.core = new CoreClient(vscode.workspace.getConfiguration("patchport").get<string>("corePython", "") || defaultPython(), path.join(context.extensionPath, "core"));
     this.ledger = new Ledger(this.core, path.join(context.globalStorageUri.fsPath, "ledgers"), () => this.changed());
-    this.router = new Router(board, async (id, text) => {
+    this.router = new Router(board, async (id, text, localDelivery) => {
+      if (localDelivery) { await this.host.local!.queue(id, localDelivery); return; }
       const delivery = this.router.deliveries.find(d => d.target === id && d.status === "sent");
       if (!delivery) throw new Error("The delivery ledger is missing.");
       await this.ledger.delivery({ ...delivery, status: "queued" });
@@ -100,13 +107,14 @@ class Controller implements vscode.TreeDataProvider<vscode.TreeItem>, vscode.Dis
       if (!target || target.generation !== delivery.generation || target.phase !== "busy" || target.dirty || target.focused) throw new Error("Target input state changed while preparing delivery.");
       this.host.send(id, text);
     }, () => this.changed());
-    this.host = new SessionHost(this.router, path.join(context.globalStorageUri.fsPath, "sessions"), context.extensionPath, this.ledger);
+    this.host = new SessionHost(this.router, path.join(context.globalStorageUri.fsPath, "sessions"), context.extensionPath, this.ledger,
+      profile => this.readLocalToken(profile), () => this.persistLocal());
     this.host.on("output", (id: string, data: string, sequence: number) => {
       const chunks = this.outputBatches.get(id) || []; chunks.push({ sequence, data }); this.outputBatches.set(id, chunks);
       if (!this.outputTimer) this.outputTimer = setTimeout(() => { this.outputTimer = undefined; for (const [nodeId, content] of this.outputBatches) this.post({ type: "output", id: nodeId, chunks: content }); this.outputBatches.clear(); }, 24);
     });
     this.host.on("started", (id: string) => { this.post({ type: "reset", id }); this.changed(); });
-    this.subscriptions.push(vscode.workspace.onDidChangeConfiguration(e => { if (e.affectsConfiguration("patchport.profiles")) this.changed(); }), vscode.window.onDidOpenTerminal(() => this.changed()), vscode.window.onDidCloseTerminal(() => this.changed()), vscode.workspace.onDidGrantWorkspaceTrust(() => this.changed()));
+    this.subscriptions.push(vscode.workspace.onDidChangeConfiguration(e => { if (e.affectsConfiguration("patchport.profiles") || e.affectsConfiguration("patchport.localProfiles")) this.changed(); }), vscode.window.onDidOpenTerminal(() => this.changed()), vscode.window.onDidCloseTerminal(() => this.changed()), vscode.workspace.onDidGrantWorkspaceTrust(() => this.changed()));
   }
   projects(): string[] { return (vscode.workspace.workspaceFolders || []).filter(f => f.uri.scheme === "file").map(f => f.uri.fsPath); }
   private selectedConfig(project: string): string | undefined {
@@ -120,10 +128,20 @@ class Controller implements vscode.TreeDataProvider<vscode.TreeItem>, vscode.Dis
     if (this.dataBusy || this.historyBusy || this.bodyBusy || this.stateStore.pending) throw new Error("Finish data and settings management before starting work.");
     if (this.detached(project)) throw new Error("Configuration is detached in this workspace. Explicitly reconnect in Data & settings.");
   }
+  private profileSettings(key: "profiles" | "localProfiles"): any[] {
+    const value = vscode.workspace.getConfiguration("patchport").get<unknown>(key, []);
+    return Array.isArray(value) ? value : [];
+  }
   profiles(): Profile[] {
-    const configured = vscode.workspace.getConfiguration("patchport").get<unknown[]>("profiles", []);
+    const configured = this.profileSettings("profiles");
     const values = new Map(defaultProfiles().map(p => [p.id, p]));
     for (const raw of configured) { try { const p = validateProfile(raw); values.set(p.id, p); } catch { /* Invalid settings are shown by the profile editor on save. */ } }
+    const local = this.profileSettings("localProfiles");
+    const counts = new Map<string, number>();
+    for (const raw of local) { const id = (raw as any)?.id; if (typeof id === "string") counts.set(id, (counts.get(id) || 0) + 1); }
+    for (const raw of local) {
+      try { const p = validateLocalProfile(raw); if (!values.has(p.id) && counts.get(p.id) === 1) values.set(p.id, p); } catch { /* Invalid or ambiguous local settings never replace a CLI profile. */ }
+    }
     return [...values.values()];
   }
   getState(): unknown {
@@ -131,12 +149,12 @@ class Controller implements vscode.TreeDataProvider<vscode.TreeItem>, vscode.Dis
     vscode.window.terminals.forEach(t => { let id = this.externalIds.get(t); if (!id) { id = randomUUID(); this.externalIds.set(t, id); } this.external.set(id, t); });
     return {
       board: this.router.board, runtime: [...this.router.runtime.values()], active: this.router.board.nodes.filter(n => this.host.isActive(n.id)).map(n => n.id), profiles: this.profiles(), projects: this.projects(),
-      trusted: vscode.workspace.isTrusted, supported: supportedLocal(process.platform, process.arch, vscode.env.remoteName), defaultShell: defaultShell(), platform: process.platform, remote: vscode.env.remoteName || '',
+      trusted: vscode.workspace.isTrusted, supported: supportedLocal(process.platform, process.arch, vscode.env.remoteName), defaultShell: defaultShell(), platform: process.platform, remote: vscode.env.remoteName || "",
       deliveries: this.router.deliveries.slice(-100).map(d => ({ ...d, text: d.text.slice(0, 2000) })), notices: this.router.notices, routes: this.router.board.edges.map(e => this.router.routeStatus(e)),
       external: [...this.external].map(([id, t]) => ({ id, name: t.name, capability: "focus-and-explicit-input" })), version: this.context.extension.packageJSON.version, core: this.coreView,
       projectData: { ...this.dataView, pending: this.stateStore.pending, busy: this.dataBusy }, detachedProjects: this.projects().filter(p => this.detached(p)),
       conversationData: { ...this.historyView, busy: this.historyBusy, receipt: this.historyReceipt },
-      recordData: this.recordsView,
+      recordData: this.recordsView, localProbe: this.localProbe,
       recordBody: { ...this.bodyView, busy: this.bodyBusy, receipt: this.bodyReceipt },
       connectionData: { ...this.connectionView, busy: this.connectionBusy, receipt: this.connectionReceipt },
       cleanupData: { ...this.cleanupView, busy: this.cleanupBusy, receipt: this.cleanupReceipt },
@@ -148,6 +166,7 @@ class Controller implements vscode.TreeDataProvider<vscode.TreeItem>, vscode.Dis
     if (this.disposed) return;
     if (this.dataBusy || this.stateStore.pending) this.dataDirty = true;
     for (const delivery of this.router.deliveries) {
+      if (this.router.board.nodes.find(n => n.id === delivery.target)?.provider === "local") continue;
       const key = JSON.stringify(delivery);
       if (this.deliverySnapshots.get(delivery.id) === key || delivery.status === "sent") continue;
       this.deliverySnapshots.set(delivery.id, key);
@@ -163,6 +182,7 @@ class Controller implements vscode.TreeDataProvider<vscode.TreeItem>, vscode.Dis
     this.saveTimer = setTimeout(() => { this.saveTimer = undefined; this.saveState(); }, 200);
   }
   private saveState(): void {
+    if (this.persistenceError) return;
     if (this.dataBusy || this.stateStore.pending) return;
     try {
       this.stateStore.save(this.router.board, this.savedConfigs, this.context.extension.packageJSON.version); this.persistenceError = "";
@@ -173,7 +193,11 @@ class Controller implements vscode.TreeDataProvider<vscode.TreeItem>, vscode.Dis
   private mirrorSnapshot(snapshot: Snapshot): Promise<void> {
     const next = this.mirrorChain.then(async () => {
       this.stateStore.assertUnchanged();
-      await this.context.workspaceState.update("board.v1", snapshot.board);
+      if (snapshot.schema === 3) {
+        await this.context.workspaceState.update("board.schema", 3);
+        await this.context.workspaceState.update("board.v2", snapshot.board);
+        await this.context.workspaceState.update("board.v1", { version: 2, requiresLocalSupport: true });
+      } else await this.context.workspaceState.update("board.v1", snapshot.board);
       await this.context.workspaceState.update("core.settings.v2", snapshot.configs);
       for (const name of this.context.workspaceState.keys().filter(k => k.startsWith("core.config."))) {
         const project = projectKey(name.slice("core.config.".length));
@@ -182,6 +206,71 @@ class Controller implements vscode.TreeDataProvider<vscode.TreeItem>, vscode.Dis
       for (const [project, config] of Object.entries(snapshot.configs)) if (config) await this.context.workspaceState.update(`core.config.${projectKey(project)}`, config);
     });
     this.mirrorChain = next.catch(() => {}); return next;
+  }
+  private async persistLocal(): Promise<void> {
+    if (this.persistenceError || this.dataBusy || this.stateStore.pending) throw new Error("Resolve board persistence before local dispatch.");
+    this.stateStore.save(this.router.board, this.savedConfigs, this.context.extension.packageJSON.version);
+    try { await this.mirrorSnapshot(this.stateStore.snapshot()!); }
+    catch (error) { this.persistenceError = String(error); throw error; }
+  }
+  private localSecretKey(profile: Profile): string {
+    if (!profile.local) throw new Error("Local profile required.");
+    return "local.token." + createHash("sha256").update(profile.id + "\n" + profile.local.endpointOrigin).digest("hex");
+  }
+  private readLocalToken(profile: Profile): Promise<string | undefined> {
+    return profile.local?.backend === "lmstudio" ? Promise.resolve(this.context.secrets.get(this.localSecretKey(profile))) : Promise.resolve(undefined);
+  }
+  private async probeLocal(m: Record<string, unknown>): Promise<void> {
+    await verifyLocalHelpers(this.context.extensionPath);
+    const revision = ++this.localProbeRevision;
+    const api = require(path.join(this.context.extensionPath, "media/local-api.cjs"));
+    const origin = api.normalizeOrigin(m.endpointOrigin);
+    if (!["ollama", "lmstudio"].includes(String(m.backend))) throw new Error("Choose a local runtime.");
+    const profile = this.profiles().find(p => p.id === m.id && p.local?.endpointOrigin === origin && p.local?.backend === m.backend);
+    this.localProbe = { id: m.id, backend: m.backend, endpointOrigin: origin, state: "loading", models: [] }; this.changed();
+    try {
+      const client = api.createLocalClient({ backend: m.backend, endpointOrigin: origin, ...(profile ? { token: await this.readLocalToken(profile) } : {}) });
+      const result = await client.listModels();
+      if (revision === this.localProbeRevision) this.localProbe = { id: m.id, backend: m.backend, endpointOrigin: origin, state: "ready", models: result.models };
+    } catch (error) {
+      if (revision === this.localProbeRevision) this.localProbe = { id: m.id, backend: m.backend, endpointOrigin: origin, state: "error", models: [], error: (error as any).code || "LOCAL_CONNECTION_FAILED" };
+    }
+    this.changed();
+  }
+  private async saveLocalProfile(value: unknown): Promise<void> {
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Check the local profile.");
+    const raw = { ...value as Record<string, unknown>, revision: randomUUID() };
+    const p = validateLocalProfile(raw);
+    const old = this.profiles().find(item => item.id === p.id);
+    if (old && old.provider !== "local") throw new Error("Use an ID different from an existing CLI profile.");
+    if (old?.local && (old.local.endpointOrigin !== p.local!.endpointOrigin || old.local.backend !== p.local!.backend)) await this.context.secrets.delete(this.localSecretKey(old));
+    const config = vscode.workspace.getConfiguration("patchport");
+    const entries = this.profileSettings("localProfiles").filter(item => item?.id !== p.id);
+    entries.push({ id: p.id, name: p.name, ...p.local });
+    await config.update("localProfiles", entries, vscode.ConfigurationTarget.Global);
+    this.post({ type: "state", value: this.getState() }); this.post({ type: "savedProfile", id: p.id }); this.changed();
+  }
+  private async localTokenAction(id: string, remove: boolean): Promise<void> {
+    const p = this.profiles().find(p => p.id === id && p.local?.backend === "lmstudio");
+    if (!p) throw new Error("Select a saved LM Studio profile.");
+    const key = this.localSecretKey(p);
+    if (remove) await this.context.secrets.delete(key);
+    else {
+      const token = await vscode.window.showInputBox({ title: "LM Studio API token", prompt: `${p.name} \u00B7 ${p.local!.endpointOrigin} (applies to the next session)`, password: true, ignoreFocusOut: true,
+        validateInput: value => /^[\x21-\x7e]{1,4096}$/.test(value) ? undefined : "Enter an API token without spaces or line breaks." });
+      if (token === undefined) return;
+      if (!/^[\x21-\x7e]{1,4096}$/.test(token) || this.profiles().find(item => item.id === id)?.local?.revision !== p.local!.revision) throw new Error("The profile or input changed. Enter the token again.");
+      await this.context.secrets.store(key, token);
+    }
+    this.post({ type: "localTokenUpdated", id, stored: !remove });
+  }
+  private async deleteLocalProfile(id: string): Promise<void> {
+    const p = this.profiles().find(p => p.id === id && p.provider === "local");
+    if (!p) throw new Error("The local profile is missing.");
+    await this.context.secrets.delete(this.localSecretKey(p));
+    const config = vscode.workspace.getConfiguration("patchport");
+    await config.update("localProfiles", this.profileSettings("localProfiles").filter(p => p?.id !== id), vscode.ConfigurationTarget.Global);
+    this.localProbeRevision++; this.localProbe = { state: "idle" }; this.changed(); this.post({ type: "localProfileDeleted", id });
   }
   private dataProject(project: string): string {
     this.requireWorkspace();
@@ -793,6 +882,7 @@ class Controller implements vscode.TreeDataProvider<vscode.TreeItem>, vscode.Dis
     await this.startNode(node, profile); return node.id;
   }
   private async startNode(node: NodeConfig, profile: Profile): Promise<void> {
+    if (this.starting.has(node.id) || this.host.isActive(node.id)) throw new Error("This terminal is already starting or running.");
     if (this.historyPlan || this.bodyPlan) throw new Error("Discard the body management preview before starting a session.");
     this.requireAttached(node.project); this.starting.add(node.id);
     try {
@@ -800,6 +890,18 @@ class Controller implements vscode.TreeDataProvider<vscode.TreeItem>, vscode.Dis
       if (this.runtimeView.state === "error") throw new Error(this.runtimeView.error);
       await this.refreshCore(node.project);
       if (this.coreView.state === "error") throw new Error(this.coreView.error);
+      if (profile.provider === "local") {
+        if (!profile.local?.executionLocationConfirmed) throw new Error("Confirm that this model runs on your device, then save the profile.");
+        const plan = await this.ledger.localSchema(node.project);
+        if (plan.plan_id) {
+          const answer = await vscode.window.showWarningMessage("Prepare the local conversation ledger? Existing records are preserved and older extension writers will be blocked. Stop managed terminals first.", { modal: true }, "Prepare");
+          if (answer !== "Prepare") { await this.core.request("local.schema.cancel", { plan_id: plan.plan_id }); return; }
+          this.requireAttached(node.project);
+          await this.core.request("local.schema.apply", { plan_id: plan.plan_id, apply: true });
+        } else if (plan.report?.schema !== 3 || !plan.report?.blockers?.includes("ALREADY_READY")) throw new Error(`Local ledger preparation is blocked: ${(plan.report?.blockers || []).join(", ")}`);
+        this.router.board.version = 2;
+        await this.persistLocal();
+      }
       this.requireAttached(node.project); await this.host.start(node, profile);
     } finally { this.starting.delete(node.id); }
   }
@@ -827,6 +929,19 @@ class Controller implements vscode.TreeDataProvider<vscode.TreeItem>, vscode.Dis
     if ((this.dataBusy || this.historyBusy || this.bodyBusy) && !["recordBodyCancel", "recordsCancel", "historyCancel", "dataCancel", "input", "interrupt", "stop", "stopAll", "focus", "resize", "activity"].includes(m.type)) throw new Error("Data and settings management is in progress.");
     if (this.stateStore.pending && !["dataInspect", "dataResume", "dataCancel", "workflowCancel", "runtimeRefresh", "stop", "stopAll", "interrupt"].includes(m.type)) throw new Error("Finalize the previous configuration change in Data & settings.");
     switch (m.type) {
+      case "localProbe": await this.probeLocal(m); break;
+      case "localProfileSave": await this.saveLocalProfile(m.profile); break;
+      case "localProfileDelete": await this.deleteLocalProfile(id); break;
+      case "localTokenSet": await this.localTokenAction(id, false); break;
+      case "localTokenDelete": await this.localTokenAction(id, true); break;
+      case "localNewConversation": {
+        if (!node || node.provider !== "local") break;
+        const runtime = this.router.runtime.get(id);
+        if (this.starting.has(id) || runtime?.dirty || runtime?.phase === "starting" || runtime?.phase === "busy" || this.router.pendingLocal(id) || this.router.deliveries.some(d => d.target === id && d.status === "preparing") || this.host.isActive(id) && !this.host.local?.idle(id)) throw new Error("Finish the active request and clear the draft first.");
+        const p = this.profiles().find(p => p.id === node.profileId && p.provider === "local");
+        if (!p) throw new Error("The local launch profile is missing.");
+        this.host.stop(id); await this.host.waitStopped(id); await this.startNode(node, p); break;
+      }
       case "recordBodyPreview": await this.previewRecordBody(String(m.project), String(m.action), (m.taskIds || []) as string[]); break;
       case "connectionInventory": await this.connectionInventory(String(m.project)); break;
       case "cleanupInventory": await this.cleanupInventory(String(m.project)); break;
@@ -931,13 +1046,13 @@ class Controller implements vscode.TreeDataProvider<vscode.TreeItem>, vscode.Dis
       case "activity": if (node && (m.kind === "edit" || m.kind === "submit" || m.kind === "interrupt")) this.host.activity(id, m.kind); break;
       case "resize": if (node && typeof m.cols === "number" && typeof m.rows === "number") this.host.resize(id, m.cols, m.rows); break;
       case "focus": { const r = this.router.runtime.get(id); if (r) { r.focused = m.focused === true; if (!r.focused) this.router.drain(); this.changed(); } break; }
-      case "markReady": if (node && node.provider !== "terminal") this.router.ready(id, true); break;
+      case "markReady": if (node?.provider === "local") this.host.local!.confirmReady(id); else if (node && node.provider !== "terminal") this.router.ready(id, true); break;
       case "interrupt": if (node) this.host.input(id, "\u0003"); break;
       case "stop": if (node && await vscode.window.showWarningMessage(`${node.name}: stop this terminal?`, { modal: true }, "Stop") === "Stop") this.host.stop(id); break;
       case "remove": if (node) { if (this.host.isActive(id)) throw new Error("Stop this terminal first."); for (const e of [...this.router.board.edges]) if (e.source === id || e.target === id) this.router.removeEdge(e.id); this.router.board.nodes = this.router.board.nodes.filter(n => n.id !== id); this.router.runtime.delete(id); this.changed(); } break;
       case "move": if (node) { node.x = bounded(m.x, 0, 4000, node.x); node.y = bounded(m.y, 0, 4000, node.y); this.changed(); } break;
       case "rename": if (node && typeof m.name === "string" && m.name.trim()) { node.name = m.name.slice(0, 80); this.changed(); } break;
-      case "nodeGroup": if (node && typeof m.groupId === "string" && this.router.board.groups.some(g => g.id === m.groupId)) { for (const e of [...this.router.board.edges]) if (e.source === id || e.target === id) this.router.removeEdge(e.id); node.groupId = m.groupId; this.changed(); } break;
+      case "nodeGroup": if (node && typeof m.groupId === "string" && this.router.board.groups.some(g => g.id === m.groupId)) { if (this.router.pendingLocal(id)) throw new Error("Finish the local request before changing groups."); for (const e of [...this.router.board.edges]) if (e.source === id || e.target === id) this.router.removeEdge(e.id); node.groupId = m.groupId; this.changed(); } break;
       case "connect": if (typeof m.source === "string" && typeof m.target === "string") { this.router.connect(m.source, m.target); this.router.note("Connected. Subsequent completed responses can be delivered."); } break;
       case "edge": { const e = this.router.board.edges.find(e => e.id === id); if (e) { e.enabled = m.enabled === true; this.changed(); this.router.drain(); } break; }
       case "removeEdge": this.router.removeEdge(id); break;
@@ -951,10 +1066,11 @@ class Controller implements vscode.TreeDataProvider<vscode.TreeItem>, vscode.Dis
         this.changed(); this.router.drain(); break;
       }
       case "newGroup": if (this.router.board.groups.length < 20) { this.router.board.groups.push({ ...defaultBoard().groups[0], id: randomUUID(), name: typeof m.name === "string" && m.name.trim() ? m.name.slice(0, 80) : "New group" }); this.changed(); } break;
-      case "newRound": { const g = this.router.board.groups.find(g => g.id === id); if (g && await vscode.window.showInformationMessage(`${g.name}: reset its delivery count and start a new round?`, { modal: true }, "New round") === "New round") { for (const d of this.router.deliveries) if (d.status === "queued" && this.router.board.nodes.some(n => n.id === d.target && n.groupId === g.id)) { d.status = "cancelled"; d.reason = "New round started"; } g.used = 0; g.round = randomUUID(); g.paused = false; this.changed(); } break; }
+      case "newRound": { const g = this.router.board.groups.find(g => g.id === id); if (this.router.hasPendingLocal(id)) throw new Error("Finish the local request before starting a new round."); if (g && await vscode.window.showInformationMessage(`Reset the delivery count for ${g.name} and start a new round? Model conversation context is retained.`, { modal: true }, "New round") === "New round") { if (this.router.hasPendingLocal(id)) throw new Error("A local request is still active."); for (const d of this.router.deliveries) if (d.status === "queued" && this.router.board.nodes.some(n => n.id === d.target && n.groupId === g.id)) { d.status = "cancelled"; d.reason = "New round started"; } g.used = 0; g.round = randomUUID(); g.paused = false; this.changed(); } break; }
       case "profile": {
         const p = validateProfile(m.profile);
-        const values = vscode.workspace.getConfiguration("patchport").get<Profile[]>("profiles", []).filter(old => old.id !== p.id);
+        if (this.profileSettings("localProfiles").some(item => item?.id === p.id)) throw new Error("Use an ID different from a local profile.");
+        const values = this.profileSettings("profiles").filter(old => old?.id !== p.id);
         values.push(p); await vscode.workspace.getConfiguration("patchport").update("profiles", values, vscode.ConfigurationTarget.Global);
         this.router.note(`${p.name}: launch profile saved.`); this.post({ type: "state", value: this.getState() }); this.post({ type: "savedProfile", id: p.id }); this.changed(); break;
       }

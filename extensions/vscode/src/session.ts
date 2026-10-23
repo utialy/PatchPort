@@ -4,6 +4,8 @@ import { randomBytes, createHash, timingSafeEqual } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { EventEmitter } from "node:events";
+import { LocalHost } from "./localHost";
+import { verifyLocalHelpers } from "./workflow";
 import { Terminal as HeadlessTerminal, ITerminalAddon } from "@xterm/headless";
 import { SerializeAddon } from "@xterm/addon-serialize";
 import { NodeConfig, Profile, Router, cleanMessage, inputIntent, projectKey, MAX_TEXT } from "./model";
@@ -20,8 +22,8 @@ export function launch(profile: Profile, args: string[], cwd: string, platform =
     return { file: profile.command, args };
   }
   if (profile.shell === "powershell" || profile.shell === "pwsh") {
-    if (profile.shell === 'powershell' && platform !== 'win32') throw new Error('Windows PowerShell requires Windows. Select pwsh, bash, zsh or direct.');
-    const file = profile.shellPath || (profile.shell === 'powershell' ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe') : platform === 'win32' ? 'pwsh.exe' : 'pwsh');
+    if (profile.shell === "powershell" && platform !== "win32") throw new Error("Windows PowerShell requires Windows. Select pwsh, bash, zsh or direct.");
+    const file = profile.shellPath || (profile.shell === "powershell" ? path.join(process.env.SystemRoot || "C:\\Windows", "System32/WindowsPowerShell/v1.0/powershell.exe") : platform === "win32" ? "pwsh.exe" : "pwsh");
     let script = "$ErrorActionPreference='Stop'; [Console]::InputEncoding=[Console]::OutputEncoding=$OutputEncoding=[System.Text.UTF8Encoding]::new($false); try { ";
     if (profile.profilePath) script += `. ${psQuote(profile.profilePath)}; `;
     script += `Set-Location -LiteralPath ${psQuote(cwd)}; $global:LASTEXITCODE=0; $patchportArgs=@(${args.map(psQuote).join(",")}); `;
@@ -38,6 +40,7 @@ export function launch(profile: Profile, args: string[], cwd: string, platform =
 
 export class SessionHost extends EventEmitter {
   readonly sessions = new Map<string, Running>();
+  readonly local?: LocalHost;
   private server?: Server;
   private port = 0;
   private starting = new Set<string>();
@@ -45,7 +48,11 @@ export class SessionHost extends EventEmitter {
   private cancelledStarts = new Set<string>();
   private initializing?: Promise<void>;
   private sizes = new Map<string, { cols: number; rows: number }>();
-  constructor(readonly router: Router, readonly storage: string, readonly extensionPath: string, readonly ledger?: Ledger) { super(); }
+  constructor(readonly router: Router, readonly storage: string, readonly extensionPath: string, readonly ledger?: Ledger,
+              readonly localToken: (profile: Profile) => Promise<string | undefined> = async () => undefined,
+              readonly persistLocal: () => Promise<void> = async () => {}) {
+    super(); if (ledger) this.local = new LocalHost(router, ledger, extensionPath, id => this.stop(id), persistLocal);
+  }
   async initialize(): Promise<void> {
     if (!this.initializing) this.initializing = this.openServer().catch(error => { this.server?.close(() => {}); this.server = undefined; this.initializing = undefined; throw error; });
     await this.initializing;
@@ -104,14 +111,23 @@ export class SessionHost extends EventEmitter {
           : ["/usr/bin/env", "ELECTRON_RUN_AS_NODE=1", process.execPath, path.join(this.extensionPath, "media/notify.cjs")];
         args.push("-c", `notify=${JSON.stringify(notifier)}`, "--no-daemon");
       }
-      const invocation = launch(profile, args, node.project);
+      if (profile.provider === "local") {
+        if (!this.local || !this.ledger) throw new Error("Local chat requires the managed request ledger.");
+        await verifyLocalHelpers(this.extensionPath);
+        await this.local.attach(node, profile, await this.localToken(profile));
+        await this.ledger.record(node.id, "session_started", { provider: "local" });
+      }
+      const localEntry = path.join(this.extensionPath, "media/local-terminal.cjs");
+      const invocation = profile.provider === "local" ? require(localEntry).localInvocation(process.execPath, localEntry) : launch(profile, args, node.project);
       const env: Record<string, string> = {};
-      for (const [key, value] of Object.entries(process.env)) if (value !== undefined && !["ELECTRON_RUN_AS_NODE", "NODE_OPTIONS", "VSCODE_INSPECTOR_OPTIONS"].includes(key)) env[key] = value;
+      const localEnv = new Set(["SystemRoot", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "LANG", "LC_ALL"]);
+      for (const [key, value] of Object.entries(process.env)) if (value !== undefined && (profile.provider === "local" ? localEnv.has(key) : !["ELECTRON_RUN_AS_NODE", "NODE_OPTIONS", "VSCODE_INSPECTOR_OPTIONS"].includes(key))) env[key] = value;
       Object.assign(env, { TERM: "xterm-256color", COLORTERM: "truecolor", PATCHPORT_TOKEN: token, PATCHPORT_ENDPOINT: endpoint });
+      if (profile.provider === "local") Object.assign(env, invocation.env, { ELECTRON_RUN_AS_NODE: "1" });
       if (this.closed || this.cancelledStarts.has(node.id)) throw new Error("Terminal start cancelled.");
       const size = this.sizes.get(node.id) || { cols: 90, rows: 22 };
       launchAttempted = true;
-      const child = pty.spawn(invocation.file, invocation.args, { name: 'xterm-256color', ...size, cwd: node.project, env, ...(process.platform === 'win32' ? { useConpty: true } : {}) });
+      const child = pty.spawn(invocation.file, invocation.args, { name: "xterm-256color", ...size, cwd: node.project, env, ...(process.platform === "win32" ? { useConpty: true } : {}) });
       const screen = new HeadlessTerminal({ ...size, scrollback: 2000, allowProposedApi: true });
       const serializer = new SerializeAddon(); screen.loadAddon(serializer as unknown as ITerminalAddon);
       const session: Running = { process: child, token, node, cwd, profile, output: "", screen, serializer, sequence: 0, turn: 0, disposed: false, startedAt: Date.now(), usageSequence: 0, samples: new Map(), costBaseline: 0, lastCost: null, cost: null, seen: new Set() };
@@ -127,6 +143,7 @@ export class SessionHost extends EventEmitter {
         session.disposed = true; if (session.pasteTimer) clearTimeout(session.pasteTimer);
         if (this.sessions.get(node.id) !== session) return;
         this.sessions.delete(node.id);
+        this.local?.exited(node.id);
         session.screen.dispose();
         this.router.stopped(node.id);
         this.finishRecord(node.id, { exitCode, confirmed_exit: true });
@@ -135,11 +152,11 @@ export class SessionHost extends EventEmitter {
       });
       if (profile.provider === "terminal") this.router.setPhase(node.id, "ready", "Ordinary terminal; no automatic AI routing");
       this.emit("started", node.id);
-      await this.ledger?.record(node.id, "session_started", { provider: profile.provider });
+      if (profile.provider !== "local") await this.ledger?.record(node.id, "session_started", { provider: profile.provider });
     } catch (error) {
       this.router.stopped(node.id); this.router.setPhase(node.id, "error", String(error));
       if (this.sessions.has(node.id)) this.stop(node.id);
-      else { await this.ledger?.record(node.id, "failed", { stage: "launch" }).catch(() => {}); await this.ledger?.finish(node.id, { stage: "launch_failed", confirmed_exit: !launchAttempted }).catch(() => {}); }
+      else { this.local?.exited(node.id); if (profile.provider !== "local") await this.ledger?.record(node.id, "failed", { stage: "launch" }).catch(() => {}); await this.ledger?.finish(node.id, { stage: "launch_failed", confirmed_exit: !launchAttempted }).catch(() => {}); }
       throw error;
     }
     finally { this.starting.delete(node.id); }
@@ -147,7 +164,8 @@ export class SessionHost extends EventEmitter {
   private async event(session: Running, payload: unknown): Promise<Record<string, unknown> | void> {
     if (session.disposed || !payload || typeof payload !== "object") return;
     const p = payload as Record<string, unknown>;
-    const cwd = typeof p.cwd === 'string' ? projectKey(path.resolve(p.cwd)) : undefined;
+    if (session.profile.provider === "local") return this.local!.handle(session.node.id, p);
+    const cwd = typeof p.cwd === "string" ? projectKey(path.resolve(p.cwd)) : undefined;
     const id = session.node.id;
     if (cwd !== undefined && ![session.cwd, session.node.project].some(project => project && cwd === projectKey(path.resolve(project)))) { this.router.setPhase(id, "attention", "Working directory changed; automatic delivery stopped."); return; }
     if (session.profile.provider === "claude") {
@@ -217,6 +235,7 @@ export class SessionHost extends EventEmitter {
   }
   activity(id: string, kind: "edit" | "submit" | "interrupt"): void {
     const session = this.sessions.get(id); if (!session || session.disposed) return;
+    if (session.profile.provider === "local") { this.local?.activity(id); if (kind === "edit") this.router.input(id, "x"); return; }
     if (session.pasteTimer) { clearTimeout(session.pasteTimer); session.pasteTimer = undefined; this.router.setPhase(id, "attention", "Human input interrupted automatic delivery. Inspect the input."); }
     this.router.input(id, kind === "submit" ? "\r" : kind === "interrupt" ? "\u0003" : "x");
     if (kind !== "edit") void this.ledger?.record(id, kind === "submit" ? "submitted" : "interrupted", { origin: "human" }).catch(() => { this.router.setPhase(id, "error", "Ledger recording failed"); });
@@ -225,6 +244,7 @@ export class SessionHost extends EventEmitter {
     const session = this.sessions.get(id); if (!session || session.disposed || typeof data !== "string" || data.length > 64 * 1024) return;
     // The host emulator answers status/color queries once, including while the board is closed.
     if (/^(?:\x1b\[[?>]?[0-9;]*[Rcnty]|\x1b\][^\x07]*(?:\x07|\x1b\\)|\x1bP.*\x1b\\)+$/su.test(data)) return;
+    if (session.profile.provider === "local") { if (human) this.local?.activity(id); if (human && inputIntent(data) === "edit") this.router.input(id, data); session.process.write(data); return; }
     if (!human || inputIntent(data) === "protocol") { session.process.write(data); return; }
     if (session.pasteTimer) { clearTimeout(session.pasteTimer); session.pasteTimer = undefined; this.router.setPhase(id, "attention", "Human input interrupted automatic delivery. Inspect the input."); }
     this.router.input(id, data); session.process.write(data);
@@ -232,6 +252,7 @@ export class SessionHost extends EventEmitter {
   }
   send(id: string, text: string): void {
     const session = this.sessions.get(id);
+    if (session?.profile.provider === "local") throw new Error("Local peer input must use the typed control channel.");
     if (!session || session.disposed || session.profile.provider === "terminal") throw new Error("The AI session is unavailable.");
     const safe = cleanMessage(text);
     if (!safe || safe.length > MAX_TEXT + 5000) throw new Error("Check the delivery message size.");
@@ -258,6 +279,10 @@ export class SessionHost extends EventEmitter {
     if (session && !session.disposed) { try { session.screen.resize(cols, rows); session.process.resize(cols, rows); } catch { /* Exiting terminals may reject resize. */ } }
   }
   isActive(id: string): boolean { return this.sessions.has(id) || this.starting.has(id); }
+  async waitStopped(id: string): Promise<void> {
+    for (let n = 0; n < 150 && (this.isActive(id) || this.ledger?.sessions.has(id)); n++) await new Promise(resolve => setTimeout(resolve, 100));
+    if (this.isActive(id) || this.ledger?.sessions.has(id)) throw new Error("The previous session has not confirmed its exit.");
+  }
   private finishing = new Set<Promise<void>>();
   private finishRecord(id: string, data: Record<string, unknown>): void {
     const work = (this.ledger?.finish(id, data) || Promise.resolve()).catch(() => { this.router.note("Session-end recording failed; no automatic resend."); }).finally(() => this.finishing.delete(work));
@@ -267,6 +292,7 @@ export class SessionHost extends EventEmitter {
   async shutdown(): Promise<void> {
     this.closed = true; for (const id of [...this.sessions.keys(), ...this.starting]) this.stop(id); this.server?.close(); this.server?.closeAllConnections();
     for (let count = 0; count < 30 && (this.sessions.size || this.starting.size || this.finishing.size); count++) await new Promise(resolve => setTimeout(resolve, 100));
+    this.local?.dispose();
   }
   dispose(): void { void this.shutdown(); }
 }
