@@ -118,10 +118,19 @@ async function fixture(t, { runtimeHandler, backends = ["ollama", "lmstudio"], f
     return response;
   };
   t.after(async () => {
-    await host.shutdown(); await ledger.end(); await closeCore(core); await closeCore(observer);
-    server.closeAllConnections(); await new Promise(resolve => server.close(resolve));
-    const checked = path.resolve(project), root = path.resolve(temporaryRoot) + path.sep;
-    assert.ok(checked.startsWith(root)); await fs.rm(checked, { recursive: true, force: true });
+    try { await host.shutdown(); await ledger.end(); }
+    finally {
+      // A failing lifecycle check must not leave the mock server holding the test worker open.
+      server.closeAllConnections(); await new Promise(resolve => server.close(resolve));
+      try { await closeCore(core); }
+      finally {
+        try { await closeCore(observer); }
+        finally {
+          const checked = path.resolve(project), root = path.resolve(temporaryRoot) + path.sep;
+          assert.ok(checked.startsWith(root)); await fs.rm(checked, { recursive: true, force: true });
+        }
+      }
+    }
   });
   const diagnostic = () => JSON.stringify({ runtime: [...router.runtime.values()], deliveries: router.deliveries, output });
   const start = async () => {
