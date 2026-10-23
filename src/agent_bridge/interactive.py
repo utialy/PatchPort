@@ -229,7 +229,7 @@ def event_data(db, project, row):
     if guard.version(db) == 3 and isinstance(data.get('local_request'), str):
         guard.validate_schema(db)
         from .local_requests import read_result
-        result = read_result(db, project, data['local_request'])
+        result = read_result(db, Path(project).resolve(), data['local_request'])
         if result['session_id'] != row['session']:
             raise guard.LedgerError('LOCAL_REQUEST_MISMATCH')
         data = dict(data, request_state=result['state'], body_deleted=result['body_deleted'])

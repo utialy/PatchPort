@@ -3,6 +3,7 @@ import contextlib
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
+import os
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -550,6 +551,42 @@ class LocalRequestTests(unittest.TestCase):
         serialized = json.dumps([self.rows(table) for table in tables])
         for value in (requested, reported):
             self.assertNotIn(value, serialized)
+
+    def assert_resolved_project_event_views(self, selected):
+        self.ready()
+        request_id, digest = self.prepare()
+        self.dispatch(request_id, digest)
+        self.finish(request_id, digest)
+        scope = dict(database=str(self.path), project=str(selected))
+        report = self.call('interactive.report', **scope)
+        completed = next(row for row in report['events'] if row['kind'] == 'completed')
+        self.assertEqual(completed['data']['local_request'], request_id)
+        self.assertEqual(completed['data']['text'], 'fixture reply')
+        event = self.call('interactive.event', **scope, event_id=completed['id'])
+        self.assertEqual(event['data']['text'], 'fixture reply')
+        self.assertEqual(event['data']['request_state'], 'COMPLETED')
+
+    def test_event_views_reuse_the_resolved_selected_project(self):
+        selected = self.project.parent / (self.project.name + '-selected-alias')
+        resolve = Path.resolve
+        def resolve_selected(path, *args, **kwargs):
+            return self.project if path == selected else resolve(path, *args, **kwargs)
+        with patch.object(Path, 'resolve', resolve_selected):
+            self.assert_resolved_project_event_views(selected)
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows short path aliases')
+    def test_event_views_accept_real_windows_short_project_paths(self):
+        import ctypes
+        get_short = ctypes.WinDLL('kernel32', use_last_error=True).GetShortPathNameW
+        get_short.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint32]
+        get_short.restype = ctypes.c_uint32
+        buffer = ctypes.create_unicode_buffer(32768)
+        length = get_short(str(self.project), buffer, len(buffer))
+        self.assertTrue(0 < length < len(buffer))
+        if os.path.normcase(buffer.value) == os.path.normcase(str(self.project)):
+            self.skipTest('This volume does not expose an 8.3 alias for the fixture')
+        self.assertEqual(Path(buffer.value).resolve(), self.project.resolve())
+        self.assert_resolved_project_event_views(buffer.value)
 
     def test_local_request_lifecycle_never_opens_network_or_invokes_provider(self):
         with patch('socket.create_connection', side_effect=AssertionError('Network is not allowed')), \
